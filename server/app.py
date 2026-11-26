@@ -14,6 +14,7 @@ from flask import Flask, abort, g, jsonify, request, send_file, session
 from werkzeug.exceptions import HTTPException
 from werkzeug.security import check_password_hash, generate_password_hash
 
+from .details import register_details
 from .model import PHASES, bundle_body, compile_actions, fingerprint, string, variables
 
 ROOT = Path(__file__).resolve().parent
@@ -332,10 +333,12 @@ def create_app(directory, secure=False):
         data = payload()
         phase, trigger = data.get("phase"), data.get("trigger")
         scope, principal = data.get("scope"), string(data.get("principal"), "Ziel")
-        if phase not in PHASES or trigger not in ("now", "at", "boot", "login") or scope not in ("device", "user"):
+        if phase not in PHASES or trigger not in ("now", "at", "boot", "login", "manual") or scope not in ("device", "user"):
             abort(400)
         if (scope == "user" and trigger == "boot") or (scope == "device" and phase == "start"):
             abort(400, "Benutzer benötigen eine Sitzung. Start-Aktionen benötigen ein Benutzerziel.")
+        if trigger == "manual" and (scope != "user" or phase != "start"):
+            abort(400, "Manueller Start benötigt die Startliste und ein Benutzerziel.")
         due = data.get("due") if trigger == "at" else None
         if trigger == "at" and (type(due) is not int or due < 1):
             abort(400, "Zeitpunkt fehlt.")
@@ -434,6 +437,7 @@ def create_app(directory, secure=False):
         db().commit()
         return jsonify(ok=True)
 
+    register_details(app, db, rows, globals_, packages, manifest)
     return app
 
 

@@ -92,6 +92,35 @@ class DistributionTests(unittest.TestCase):
         self.post("bundles", body | {"id": key, "revision": 1})
         self.assertEqual(self.admin.post("/api/admin/bundles", json=body | {"id": key, "revision": 1}).status_code, 409)
 
+    def test_catalog_manual_launch_policy_and_inventory_isolation(self):
+        user = self.agent("anna", "user")
+        other = self.agent("other", "user")
+        device = self.agent("surface", "device")
+        key = self.post("bundles", {"name":"Example", "actions":{"start":["Example/App.exe"]}})["id"]
+        params = {"bundle": key, "principal":"anna", "scope":"user", "phase":"start", "trigger":"manual"}
+        self.post("assignments", params)
+        catalog = user.get("/api/agent/catalog").json
+        app, = catalog["apps"]
+        self.assertEqual(app["launch"], 1)
+        self.assertEqual(other.get("/api/agent/catalog").json["apps"], [])
+        self.assertEqual(device.get("/api/agent/catalog").status_code, 403)
+        policy = self.admin.get("/api/admin/branding").json
+        self.post("branding", policy | {"title":"Werkzeuge", "theme":"light", "search":False})
+        self.assertEqual(user.get("/api/agent/catalog").json["policy"]["title"], "Werkzeuge")
+        self.assertEqual(self.admin.post("/api/admin/branding",json=policy).status_code,409)
+        self.post("catalog", {"ids":[key],"action":"disable"})
+        self.assertEqual(user.get("/api/agent/catalog").json["apps"], [])
+        self.assertEqual(user.post("/api/agent/inventory",json={}).status_code,403)
+        self.assertEqual(device.post("/api/agent/inventory",json={"hostname":"lab","version":"0.2.0"}).status_code,200)
+        obj = self.admin.get("/api/admin/device/3").json
+        self.assertEqual(obj["inventory"]["hostname"], "lab")
+        self.assertIsNotNone(obj["scanned"])
+        self.post("device/3", {"etag":obj["etag"],"owner":"Anna"})
+        self.assertEqual(self.admin.get("/api/admin/device/3").json["properties"]["owner"], "Anna")
+        detail = self.admin.get("/api/admin/bundle/"+str(key)).json
+        self.assertEqual(detail["versions"][0]["revision"],1)
+        self.assertTrue(detail["guid"])
+
     def test_legacy_bundle_sandbox_and_activation(self):
         agent = self.agent("anna", "user")
         key = self.post("bundles", {"name": "Editor", "actions": {"start": ["App/Live.exe"]}})["id"]

@@ -1,15 +1,17 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory)][ValidateSet('device','user')][string]$Scope,
-    [Parameter(Mandatory)][uri]$Server,
+    [uri]$Server,
     [Parameter(Mandatory)][string]$Binary,
-    [SecureString]$Token
+    [SecureString]$Token,
+    [switch]$Update
 )
 $ErrorActionPreference = 'Stop'
-if ($Server.Scheme -ne 'https' -and !($Server.Scheme -eq 'http' -and $Server.Host -in @('localhost','127.0.0.1','[::1]'))) {
+if (!$Update -and !$Server) { throw 'Serveradresse fehlt.' }
+if ($Server -and $Server.Scheme -ne 'https' -and !($Server.Scheme -eq 'http' -and $Server.Host -in @('localhost','127.0.0.1','[::1]'))) {
     throw 'Für entfernte Server ist HTTPS erforderlich.'
 }
-if ($Server.AbsolutePath -ne '/' -or $Server.Query -or $Server.Fragment -or $Server.UserInfo) {
+if ($Server -and ($Server.AbsolutePath -ne '/' -or $Server.Query -or $Server.Fragment -or $Server.UserInfo)) {
     throw 'Bitte nur die Serveradresse mit optionalem Port angeben.'
 }
 $source = (Resolve-Path -LiteralPath $Binary).Path
@@ -28,6 +30,33 @@ if ($isDevice) {
     $principal = New-ScheduledTaskPrincipal -UserId $identity.Name -LogonType Interactive -RunLevel Limited
 }
 $configPath = Join-Path $dest 'agent.json'
+$exe = Join-Path $dest 'openworks-agent.exe'
+if (!$isDevice) {
+    $guiSource = Join-Path (Split-Path -Parent $source) 'OpenWorks-Apps.exe'
+    if (!(Test-Path -LiteralPath $guiSource -PathType Leaf)) { throw 'OpenWorks-Apps.exe neben der Agent-EXE bereitstellen (Build-Client.ps1).' }
+}
+function Install-Catalog {
+    $gui = Join-Path $dest 'OpenWorks-Apps.exe'
+    Copy-Item -LiteralPath $guiSource -Destination $gui -Force
+    $menu = [Environment]::GetFolderPath('Programs')
+    $shortcut = (New-Object -ComObject WScript.Shell).CreateShortcut((Join-Path $menu 'OpenWorks Anwendungen.lnk'))
+    $shortcut.TargetPath = $gui
+    $shortcut.WorkingDirectory = $dest
+    $shortcut.Save()
+}
+if ($Update) {
+    if (!(Test-Path -LiteralPath $configPath -PathType Leaf)) { throw 'Vorhandene Registrierung fehlt.' }
+    if (!$isDevice) { Install-Catalog }
+    $staged = Join-Path $dest ('update-' + [Guid]::NewGuid() + '.exe')
+    try {
+        Copy-Item -LiteralPath $source -Destination $staged
+        [IO.File]::Replace($staged, $exe, (Join-Path $dest 'agent.previous.exe'))
+    } finally {
+        if (Test-Path -LiteralPath $staged) { Remove-Item -LiteralPath $staged }
+    }
+    Start-ScheduledTask -TaskName "$taskName-poll"
+    return
+}
 if (Test-Path -LiteralPath $configPath) { throw "Agent bereits eingerichtet: $dest" }
 $null = New-Item -Path $dest -ItemType Directory -Force
 if ($isDevice) {
@@ -35,7 +64,6 @@ if ($isDevice) {
     if ($LASTEXITCODE) { throw 'Agent-Verzeichnis konnte nicht geschützt werden.' }
 }
 if (!$Token) { $Token = Read-Host 'Agent-Token aus der OpenWorks-Konsole' -AsSecureString }
-$exe = Join-Path $dest 'openworks-agent.exe'
 Copy-Item -LiteralPath $source -Destination $exe -Force
 $config = @{ server=$Server.GetLeftPart([UriPartial]::Authority); scope=$Scope; token=[Net.NetworkCredential]::new('', $Token).Password }
 [IO.File]::WriteAllText($configPath, ($config | ConvertTo-Json), [Text.UTF8Encoding]::new($false))
@@ -46,6 +74,7 @@ function Register-SyncTask($eventName, $trigger) {
 }
 $registered = @()
 try {
+    if (!$isDevice) { Install-Catalog }
     if ($isDevice) {
         Register-SyncTask 'boot' (New-ScheduledTaskTrigger -AtStartup)
         $registered += 'boot'

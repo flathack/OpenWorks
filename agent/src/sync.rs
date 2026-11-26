@@ -100,9 +100,15 @@ impl State {
     }
 }
 
-pub fn sync(config: &Config, dir: &Path, client: &Client, event: &str) -> Result<()> {
+pub fn sync(
+    config: &Config,
+    dir: &Path,
+    client: &Client,
+    event: &str,
+    manual: Option<u64>,
+) -> Result<()> {
     let mut state = State::load(dir)?;
-    if event != "poll" {
+    if matches!(event, "login" | "boot") {
         state.events.insert(event.to_owned());
         state.save(dir)?;
     }
@@ -124,17 +130,35 @@ pub fn sync(config: &Config, dir: &Path, client: &Client, event: &str) -> Result
     state
         .jobs
         .retain(|id, _| manifest.assignments.iter().any(|rule| rule.id == *id));
-    for rule in &manifest.assignments {
-        state.schedule(rule, manifest.now);
+    if let Some(id) = manual {
+        let rule = manifest
+            .assignments
+            .iter()
+            .find(|r| r.id == id && r.trigger == "manual" && r.phase == "start")
+            .context("Diese Anwendung ist nicht mehr zum manuellen Start zugewiesen.")?;
+        let job = state.jobs.entry(id).or_default();
+        if job.completed || job.version != rule.version {
+            *job = Job {
+                version: rule.version.clone(),
+                ..Job::default()
+            };
+        }
+    } else {
+        for rule in &manifest.assignments {
+            state.schedule(rule, manifest.now);
+        }
+        state.events.clear();
     }
-    state.events.clear();
     state.save(dir)?;
     let mut failed = false;
     for rule in &manifest.assignments {
+        if manual.is_some_and(|id| id != rule.id) {
+            continue;
+        }
         let Some(job) = state.jobs.get(&rule.id) else {
             continue;
         };
-        if !job.completed {
+        if !job.completed && (rule.trigger != "manual" || manual.is_some()) {
             let result = run_steps(config, dir, client, &mut state, rule);
             let job = state.jobs.get_mut(&rule.id).unwrap();
             match result {

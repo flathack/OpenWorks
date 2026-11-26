@@ -346,7 +346,7 @@ function catalogAction(action, id) {
     case "open-group":
       return groupEditor(group);
     case "open-bundle":
-      return bundleEditor(id);
+      return openObject("bundle",id);
     case "edit":
       return obj.type === "bundle"
         ? bundleEditor(obj.id)

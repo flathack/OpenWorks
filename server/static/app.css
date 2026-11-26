@@ -735,3 +735,84 @@ legend {
     flex-wrap: wrap;
   }
 }
+.record-path {
+  color: #405872;
+  margin: 10px 0 14px;
+  font-size: 13px;
+}
+.record-path button {
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: #176193;
+  text-decoration: underline;
+}
+.version-line {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+.version-line select {
+  width: auto;
+}
+.record-tabs {
+  flex-wrap: wrap;
+  gap: 3px;
+  margin-bottom: 17px;
+}
+.record-tabs button {
+  padding: 8px 10px;
+}
+.record-panel {
+  border: 1px solid var(--edge);
+  border-radius: 3px;
+  margin: 0 0 14px;
+  min-width: 0;
+  overflow: auto;
+}
+.record-panel > summary {
+  padding: 7px 10px;
+  background: #f5f8fa;
+  border-bottom: 1px solid var(--edge);
+  font-size: 13px;
+}
+.record-panel > .panel {
+  border: 0;
+}
+.record-panel > .quiet {
+  margin: 8px;
+}
+.record-fields {
+  margin: 0;
+  font-size: 13px;
+}
+.record-fields > div {
+  display: grid;
+  grid-template-columns: minmax(130px, 35%) 1fr;
+  padding: 4px 10px;
+  gap: 9px;
+}
+.record-fields > div:nth-child(even) {
+  background: #f4f7f9;
+}
+.record-fields dt {
+  color: #314b65;
+}
+.record-fields dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+.record-columns {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(220px, 1fr);
+  gap: 14px;
+}
+@media (max-width: 820px) {
+  .record-columns {
+    grid-template-columns: 1fr;
+  }
+  .record-tabs button {
+    padding: 6px;
+  }
+}

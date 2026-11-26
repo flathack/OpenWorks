@@ -2,6 +2,7 @@
 
 const $ = (selector, root = document) => root.querySelector(selector);
 const sections = {
+  policies: ["Richtlinien", "M5 4h14v16H5zM8 9h8m-8 4h6"],
   dashboard: ["Startseite", "M3 10L12 3l9 7M6 9v12h5v-7h3v7h4V9"],
   bundles: ["Bundles", "m3 7 9-4 9 4-9 4-9-4zm0 0v10l9 4 9-4V7m-9 4v10"],
   assignments: [
@@ -19,6 +20,7 @@ const sections = {
 };
 const phases = { install: "Install", start: "Start", uninstall: "Uninstall" };
 const triggers = {
+  manual: "Im Anwendungskatalog",
   now: "Beim nächsten Abruf",
   boot: "Beim Booten",
   login: "Bei Anmeldung",
@@ -70,6 +72,7 @@ async function api(path, method = "GET", data) {
   return result;
 }
 function signedOut() {
+  objectView = null;
   state = null;
   if ($("#modal").open) $("#modal").close();
   $("#shell").hidden = true;
@@ -149,10 +152,27 @@ function render() {
     )
     .join("");
   $("#heading").textContent = sections[section][0];
+  if (objectView) {
+    drawSidebar();
+    renderObject();
+    return;
+  }
   let html;
   switch (section) {
     case "bundles":
       html = catalogPage();
+      break;
+    case "policies":
+      html = table(
+        ["Richtlinie", "Typ", "Geltungsbereich"],
+        [
+          [
+            btn("open-policy", "Anwendungskatalog", 1),
+            "Endbenutzer-Branding",
+            "Alle Benutzer-Agenten",
+          ],
+        ],
+      );
       break;
     case "dashboard":
       html = dashboardPage();
@@ -186,7 +206,9 @@ function render() {
               (a) => a.scope === (section === "users" ? "user" : "device"),
             )
             .map((a) => [
-              esc(a.label),
+              a.scope === "device"
+                ? btn("open-device", esc(a.label), a.id)
+                : esc(a.label),
               badge(scopes[a.scope]),
               esc(a.principal),
               time(a.last_seen),
@@ -476,18 +498,30 @@ function assignmentEditor(id, initialBundle, group) {
         ),
       ),
     );
-    $("#trigger").innerHTML = options(
-      Object.fromEntries(
-        Object.entries(triggers).filter(([t]) => t !== "boot" || !user),
-      ),
-    );
-    $("#date-label").hidden = true;
-    $("#due").required = false;
+    updateTriggers();
     $("#save").disabled = !$("#phase").value;
     $("#editor .error").textContent = $("#phase").value
       ? ""
       : "Für dieses Ziel enthält das Bundle keine passende Aktionsliste.";
   }
+  function updateTriggers() {
+    const previous = $("#trigger").value;
+    const user =
+      state.agents.find((a) => a.id === Number($("#target").value))?.scope ===
+      "user";
+    const allowed = Object.entries(triggers).filter(
+      ([k]) =>
+        (k !== "boot" || !user) &&
+        (k !== "manual" || (user && $("#phase").value === "start")),
+    );
+    $("#trigger").innerHTML = options(Object.fromEntries(allowed));
+    $("#trigger").value = allowed.some(([k]) => k === previous)
+      ? previous
+      : "now";
+    $("#date-label").hidden = $("#trigger").value !== "at";
+    $("#due").required = !$("#date-label").hidden;
+  }
+  $("#phase").onchange = updateTriggers;
   $("#bundle").onchange = choices;
   $("#target").onchange = choices;
   $("#trigger").onchange = () => {
@@ -506,6 +540,7 @@ function assignmentEditor(id, initialBundle, group) {
   if (current) {
     if (Array.from($("#phase").options).some((o) => o.value === current.phase))
       $("#phase").value = current.phase;
+    updateTriggers();
     $("#trigger").value = current.trigger;
     $("#trigger").onchange();
     if (current.due) {
@@ -546,6 +581,9 @@ function agentEditor() {
   $("#scope").value = section === "users" ? "user" : "device";
 }
 async function handle(action, id) {
+  if (action === "open-device") return openObject("device", id);
+  if (action === "open-policy") return openObject("branding", 1);
+  if (action.startsWith("detail-")) return detailAction(action.slice(7));
   if (action === "refresh") return refresh();
   if (action === "bundle") return bundleEditor(id);
   if (action === "assign") return assignmentEditor(id);
@@ -589,6 +627,7 @@ async function handle(action, id) {
 $("#shell").onclick = (e) => {
   const link = e.target.closest("[data-section]");
   if (link) {
+    objectView = null;
     section = link.dataset.section;
     render();
     return;

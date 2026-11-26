@@ -52,12 +52,12 @@ Die von Tailscale ausgegebene HTTPS-Adresse dient der Webkonsole und dem Agenten
 2. Das einmalig angezeigte Token bereithalten. Der Agent liegt als Rust-Quellprojekt bei. Auf einem Windows-Buildrechner mit Rust ab 1.89, C++-Build-Tools und Windows SDK für die Zielarchitektur bauen.
 
    ```powershell
-   cargo build --locked --release --manifest-path agent/Cargo.toml
+   ./scripts/Build-Client.ps1
    ```
 
-   Für MSVC eine Visual-Studio-Entwicklershell mit verfügbarem Linker verwenden. Mit eingerichteter x64-GNU-Toolchain und MinGW-w64 funktioniert alternativ `cargo +stable-x86_64-pc-windows-gnu build --locked --release --manifest-path agent/Cargo.toml`.
+   Für MSVC eine Visual-Studio-Entwicklershell mit verfügbarem Linker verwenden. Mit eingerichteter x64-GNU-Toolchain und MinGW-w64 funktioniert alternativ `./scripts/Build-Client.ps1 -Toolchain stable-x86_64-pc-windows-gnu`.
 
-3. Die EXE aus `agent\target\release\` und `scripts\Install-Agent.ps1` auf den Zielrechner kopieren. Für die Geräteeinrichtung eine administrative PowerShell verwenden.
+3. Beide EXE-Dateien aus `agent\target\release\` und `scripts\Install-Agent.ps1` auf den Zielrechner kopieren. Für die Geräteeinrichtung eine administrative PowerShell verwenden.
 
    ```powershell
    .\Install-Agent.ps1 -Scope device -Server https://openworks.example.org -Binary .\openworks-agent.exe
@@ -66,6 +66,18 @@ Die von Tailscale ausgegebene HTTPS-Adresse dient der Webkonsole und dem Agenten
    Für die Benutzereinrichtung den Befehl mit `-Scope user` in der Sitzung des zugewiesenen Windows-Benutzers ausführen. Das Skript fragt das Token verdeckt ab. Auf demselben PC können beide Agenten parallel arbeiten.
 
 4. Der Geräte-Agent läuft als SYSTEM, der Benutzer-Agent mit eingeschränkten Benutzerrechten. Windows-Aufgaben lösen Boot, Anmeldung und einen Abruf alle fünf Minuten aus. Ein Benutzer-MSI muss die Installation ohne erhöhte Rechte unterstützen. Bei mehreren Benutzerinstallationen mit gleicher Zielkennung erhält jede Installation die Zuweisungen.
+
+## Anwendungskatalog und Objektseiten
+
+Benutzer öffnen **OpenWorks Anwendungen** im Windows-Startmenü. Der lokale Windows-Forms-Katalog zeigt zugewiesene Apps als Kacheln oder Liste mit Suche und Favoriten. Vorhandene Anwendungssymbole werden für Start-Aktionen aus der installierten EXE gelesen. Alternative Symbole und Beschreibungen lassen sich in den Bundle-Einstellungen pflegen. Der Rust-Agent prüft eine manuelle Startzuweisung beim Klick erneut auf dem Server. Dafür die Startliste einem Benutzer mit Auslöser **Im Anwendungskatalog** zuweisen. Andere Auslöser behalten ihren Zeitplan.
+
+Unter **Richtlinien → Anwendungskatalog → Einstellungen** lassen sich Fenstertitel, Hintergrund, Akzentfarbe, Standardansicht, Suche und Favoriten veröffentlichen. Die Richtlinie gilt für alle Benutzer-Agenten. Ein geöffnetes Fenster ruft sie alle fünf Minuten sowie über **Aktualisieren** ab. Eine deaktivierte Richtlinie verwendet die OpenWorks-Standardgestaltung.
+
+Ein Klick auf einen Gerätenamen öffnet Zusammenfassung, Inventar, Zuweisungen, Einstellungen und Meldungen. Der Geräte-Agent sendet etwa alle 15 Minuten Windows- und Hardwareinformationen. Organisation und Standort können Administratoren ergänzen. Unter **Einstellungen** lassen sich die auf diesem Gerät installierten Benutzer-Agenten verknüpfen. Deren Katalog zeigt auch Gerätezuweisungen an, die weiterhin im Gerätekontext ausgeführt werden.
+
+Ein Klick auf einen Bundle-Namen öffnet die Zusammenfassung. Weitere Reiter zeigen Beziehungen, Aktionslisten, Variablen, Freigabe und veröffentlichte Revisionen. Der Versionswähler schaltet zwischen Veröffentlichung und vorhandenem Sandbox-Entwurf um. Die Revisionsliste wird ab Installation dieser Version geführt. Für ältere Einträge sind historische Zeitpunkte unbekannt.
+
+Bestehende Installationen mit **Install-Agent.ps1 -Update -Scope user -Binary .\openworks-agent.exe** aktualisieren. Die Katalog-EXE muss neben dem Rust-Agenten liegen. Für den Geräte-Agenten **-Scope device** administrativ ausführen. Das Update übernimmt die vorhandene Registrierung und die Windows-Aufgaben.
 
 ## Erstes Bundle verteilen
 

@@ -1,3 +1,4 @@
+mod inventory;
 mod runner;
 mod sync;
 
@@ -43,12 +44,15 @@ impl Config {
 fn main() -> Result<()> {
     let args: Vec<_> = env::args_os().collect();
     ensure!(
-        args.len() == 3,
-        "Usage: openworks-agent <config.json> <poll|boot|login>"
+        (3..=4).contains(&args.len()),
+        "Usage: openworks-agent <config.json> <poll|boot|login|catalog|inventory|launch ID>"
     );
     let event = args[2].to_str().unwrap_or("");
     ensure!(
-        matches!(event, "poll" | "boot" | "login"),
+        matches!(
+            event,
+            "poll" | "boot" | "login" | "catalog" | "inventory" | "launch"
+        ) && (event == "launch") == (args.len() == 4),
         "Unknown trigger"
     );
     // Windows Installer accepts ordinary drive and UNC paths to cached packages.
@@ -57,6 +61,22 @@ fn main() -> Result<()> {
     let text = fs::read_to_string(&path)?;
     let config: Config = serde_json::from_str(text.trim_start_matches('\u{feff}'))?;
     config.validate()?;
+    let client = Client::builder()
+        .redirect(Policy::none())
+        .connect_timeout(Duration::from_secs(15))
+        .timeout(Duration::from_secs(600))
+        .build()?;
+    if event == "catalog" {
+        ensure!(config.scope == "user", "Catalog requires user enrollment");
+        let result: serde_json::Value = client
+            .get(config.url("catalog"))
+            .bearer_auth(&config.token)
+            .send()?
+            .error_for_status()?
+            .json()?;
+        println!("{}", serde_json::to_string(&result)?);
+        return Ok(());
+    }
     let lock = fs::OpenOptions::new()
         .read(true)
         .write(true)
@@ -64,10 +84,26 @@ fn main() -> Result<()> {
         .truncate(false)
         .open(dir.join("agent.lock"))?;
     lock.lock()?;
-    let client = Client::builder()
-        .redirect(Policy::none())
-        .connect_timeout(Duration::from_secs(15))
-        .timeout(Duration::from_secs(600))
-        .build()?;
-    sync::sync(&config, dir, &client, event)
+    if event == "inventory" {
+        return inventory::send(&config, dir, &client);
+    }
+    let manual = if event == "launch" {
+        ensure!(config.scope == "user", "Launch requires user enrollment");
+        Some(
+            args[3]
+                .to_str()
+                .context("Invalid assignment")?
+                .parse::<u64>()?,
+        )
+    } else {
+        None
+    };
+    let result = sync::sync(&config, dir, &client, event, manual);
+    if config.scope == "device"
+        && inventory::due(dir)
+        && let Err(error) = inventory::send(&config, dir, &client)
+    {
+        eprintln!("Inventory: {error}");
+    }
+    result
 }

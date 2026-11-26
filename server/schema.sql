@@ -45,3 +45,36 @@ CREATE TABLE IF NOT EXISTS reports (
  status TEXT NOT NULL, detail TEXT NOT NULL, seen INTEGER NOT NULL,
  PRIMARY KEY(agent,assignment)
 );
+
+CREATE TABLE IF NOT EXISTS device_info (
+ agent INTEGER PRIMARY KEY REFERENCES agents(id) ON DELETE CASCADE,
+ guid TEXT NOT NULL DEFAULT (lower(hex(randomblob(16)))), created INTEGER,
+ inventory TEXT NOT NULL DEFAULT '{}', scanned INTEGER, properties TEXT NOT NULL DEFAULT '{}'
+);
+CREATE TABLE IF NOT EXISTS bundle_info (
+ bundle INTEGER PRIMARY KEY REFERENCES bundles(id) ON DELETE CASCADE,
+ guid TEXT NOT NULL DEFAULT (lower(hex(randomblob(16)))), created INTEGER,
+ description TEXT NOT NULL DEFAULT '', symbol TEXT NOT NULL DEFAULT 'app', notes TEXT NOT NULL DEFAULT ''
+);
+CREATE TABLE IF NOT EXISTS bundle_versions (
+ bundle INTEGER NOT NULL REFERENCES bundles(id) ON DELETE CASCADE, revision INTEGER NOT NULL,
+ name TEXT NOT NULL, recorded INTEGER, PRIMARY KEY(bundle,revision)
+);
+CREATE TRIGGER IF NOT EXISTS agent_created AFTER INSERT ON agents BEGIN
+ INSERT INTO device_info(agent,created) VALUES (new.id,unixepoch());
+END;
+CREATE TRIGGER IF NOT EXISTS bundle_created AFTER INSERT ON bundles BEGIN
+ INSERT INTO bundle_info(bundle,created) VALUES (new.id,unixepoch());
+ INSERT INTO bundle_versions VALUES (new.id,new.revision,new.name,unixepoch());
+END;
+CREATE TRIGGER IF NOT EXISTS bundle_published AFTER UPDATE OF revision ON bundles
+WHEN new.revision != old.revision BEGIN
+ INSERT INTO bundle_versions VALUES (new.id,new.revision,new.name,unixepoch());
+END;
+INSERT OR IGNORE INTO device_info(agent) SELECT id FROM agents;
+INSERT OR IGNORE INTO bundle_info(bundle) SELECT id FROM bundles;
+INSERT OR IGNORE INTO bundle_versions(bundle,revision,name) SELECT id,revision,name FROM bundles;
+CREATE TABLE IF NOT EXISTS user_device (
+ user_agent INTEGER PRIMARY KEY REFERENCES agents(id) ON DELETE CASCADE,
+ device_agent INTEGER NOT NULL REFERENCES agents(id) ON DELETE CASCADE
+);
