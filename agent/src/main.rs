@@ -1,8 +1,13 @@
 #[cfg(windows)]
 mod files;
 mod inventory;
+#[cfg(windows)]
+mod msi;
+mod progress;
 mod requirements;
 mod runner;
+#[cfg(windows)]
+mod service;
 mod sync;
 #[cfg(windows)]
 mod windows_filters;
@@ -53,6 +58,10 @@ fn main() -> Result<()> {
         "Usage: openworks-agent <config.json> <poll|boot|login|catalog|inventory|launch ID>"
     );
     let event = args[2].to_str().unwrap_or("");
+    #[cfg(windows)]
+    if event == "service" && args.len() == 3 {
+        return service::dispatch();
+    }
     ensure!(
         matches!(
             event,
@@ -86,6 +95,7 @@ fn main() -> Result<()> {
             .error_for_status()?
             .json()?;
         requirements::filter_catalog(&mut result)?;
+        sync::installed_catalog(dir, &mut result)?;
         println!("{}", serde_json::to_string(&result)?);
         return Ok(());
     }

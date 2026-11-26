@@ -68,6 +68,10 @@ def register_details(app, db, rows, globals_, packages, manifest):
                 info = db().execute("SELECT description,symbol FROM bundle_info WHERE bundle=?", (key,)).fetchone()
                 apps[key] = dict(bundle=key, name=rule["name"], revision=rule["revision"],
                                  **dict(info), launch=None, phases=[], icon_path=None, device=False)
+            if rule["phase"] == "install" or rule["install"]:
+                apps[key]["user_install_version"] = rule["install_version"]
+            if rule["phase"] == "install" and rule["trigger"] == "manual":
+                apps[key]["install"] = rule["id"]
             if "requires" in rule:
                 apps[key].update(requires=rule["requires"], show_unmet=rule["show_unmet"])
             apps[key]["phases"].append(rule["phase"])
@@ -93,6 +97,8 @@ def register_details(app, db, rows, globals_, packages, manifest):
             if gated:
                 item.update(requires=condition(requirement, resolver(recipe, globals_())),
                             show_unmet=recipe.get("show_unmet", False))
+            if row["phase"] == "install":
+                item["device_install_version"] = fingerprint(compile_actions(recipe, globals_(), packages())["install"])
             item["device"] = True
             if row["phase"] not in item["phases"]:
                 item["phases"].append(row["phase"])

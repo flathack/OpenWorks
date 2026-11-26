@@ -337,8 +337,8 @@ def create_app(directory, secure=False):
             abort(400)
         if (scope == "user" and trigger == "boot") or (scope == "device" and phase == "start"):
             abort(400, "Benutzer benötigen eine Sitzung. Start-Aktionen benötigen ein Benutzerziel.")
-        if trigger == "manual" and (scope != "user" or phase != "start"):
-            abort(400, "Manueller Start benötigt die Startliste und ein Benutzerziel.")
+        if trigger == "manual" and (scope != "user" or phase not in ("install","start")):
+            abort(400, "Manuelle Ausführung benötigt die Installations- oder Startliste und ein Benutzerziel.")
         due = data.get("due") if trigger == "at" else None
         if trigger == "at" and (type(due) is not int or due < 1):
             abort(400, "Zeitpunkt fehlt.")
@@ -429,6 +429,13 @@ def create_app(directory, secure=False):
                 continue
             if not item["steps"]:
                 continue
+            def labels(phase):
+                return [x.get("name", "") if isinstance(x, dict) else x
+                        for x in body["actions"].get(phase, [])
+                        if not isinstance(x, dict) or x.get("enabled", True)]
+            if request.headers.get("X-OpenWorks-Protocol") == "2":
+                item["step_names"] = labels(item["phase"])
+                item["install_names"] = labels("install") if item["phase"] == "start" else []
             item["install_version"] = fingerprint(actions["install"])
             item["version"] = fingerprint([item["generation"], item["revision"], item["steps"], item["install"]])
             if "requires" in item:

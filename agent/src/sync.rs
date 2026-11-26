@@ -37,12 +37,17 @@ pub struct Step {
 struct Rule {
     id: u64,
     bundle: u64,
+    name: String,
     version: String,
     install_version: String,
     phase: String,
     trigger: String,
     due: Option<u64>,
     requires: Option<crate::requirements::Condition>,
+    #[serde(default)]
+    step_names: Vec<String>,
+    #[serde(default)]
+    install_names: Vec<String>,
     steps: Vec<Step>,
     install: Vec<Step>,
 }
@@ -154,7 +159,11 @@ pub fn sync(
         let rule = manifest
             .assignments
             .iter()
-            .find(|r| r.id == id && r.trigger == "manual" && r.phase == "start")
+            .find(|r| {
+                r.id == id
+                    && r.trigger == "manual"
+                    && matches!(r.phase.as_str(), "start" | "install")
+            })
             .context("Diese Anwendung ist nicht mehr zum manuellen Start zugewiesen.")?;
         let job = state.jobs.entry(id).or_default();
         if job.completed || job.version != rule.version {
@@ -193,7 +202,13 @@ pub fn sync(
                     }
                 }
             }
-            let result = run_steps(config, dir, client, &mut state, rule);
+            let mut progress = crate::progress::Progress::new(config, dir, rule.bundle, &rule.name);
+            let result = run_steps(config, dir, client, &mut state, rule, &mut progress);
+            progress.state = if result.is_ok() { "complete" } else { "error" };
+            if let Err(ref e) = result {
+                progress.action = format!("{e:#}");
+            }
+            progress.emit();
             let job = state.jobs.get_mut(&rule.id).unwrap();
             match result {
                 Ok(()) => {
@@ -246,6 +261,10 @@ pub fn sync(
             }
         }
     }
+    if config.scope == "device" {
+        let output = crate::progress::status_dir(config, dir).join("installed.json");
+        crate::progress::write_json(&output, &state.installed)?;
+    }
     ensure!(!failed, "Pending work will be retried on the next sync");
     Ok(())
 }
@@ -256,28 +275,33 @@ fn run_steps(
     client: &Client,
     state: &mut State,
     rule: &Rule,
+    progress: &mut crate::progress::Progress,
 ) -> Result<()> {
     if !state.jobs[&rule.id].prepared {
         if rule.phase == "start" && state.installed.get(&rule.bundle) != Some(&rule.install_version)
         {
-            run_list(config, dir, client, state, rule, &rule.install)?;
-            state
-                .installed
-                .insert(rule.bundle, rule.install_version.clone());
+            progress.phase = "install".into();
+            run_list(config, dir, client, state, rule, &rule.install, progress)?;
+            if state.jobs[&rule.id].warnings == 0 {
+                state
+                    .installed
+                    .insert(rule.bundle, rule.install_version.clone());
+            }
         }
         let job = state.jobs.get_mut(&rule.id).unwrap();
         job.prepared = true;
         job.cursor = 0;
         state.save(dir)?;
     }
-    run_list(config, dir, client, state, rule, &rule.steps)?;
+    progress.phase = rule.phase.clone();
+    run_list(config, dir, client, state, rule, &rule.steps, progress)?;
     match rule.phase.as_str() {
-        "install" => {
+        "install" if state.jobs[&rule.id].warnings == 0 => {
             state
                 .installed
                 .insert(rule.bundle, rule.install_version.clone());
         }
-        "uninstall" => {
+        "uninstall" if state.jobs[&rule.id].warnings == 0 => {
             state.installed.remove(&rule.bundle);
         }
         _ => {}
@@ -292,9 +316,22 @@ fn run_list(
     state: &mut State,
     rule: &Rule,
     steps: &[Step],
+    progress: &mut crate::progress::Progress,
 ) -> Result<()> {
     let id = rule.id;
-    for step in steps.iter().skip(state.jobs[&id].cursor) {
+    for (i, step) in steps.iter().enumerate().skip(state.jobs[&id].cursor) {
+        progress.step = i + 1;
+        progress.total = steps.len();
+        let labels = if rule.phase == "start" && progress.phase == "install" {
+            &rule.install_names
+        } else {
+            &rule.step_names
+        };
+        progress.action = labels.get(i).cloned().unwrap_or_else(|| step.kind.clone());
+        progress.state = "working";
+        progress.bytes = None;
+        progress.done = 0;
+        progress.emit();
         let result = (|| -> Result<bool> {
             if let Some(condition) = &step.requires {
                 if !condition.matches()? {
@@ -302,7 +339,7 @@ fn run_list(
                     return Ok(false);
                 }
             }
-            runner::execute(config, dir, client, rule.bundle, step)
+            runner::execute(config, dir, client, rule.bundle, step, progress)
         })();
         let reboot = match result {
             Err(e) if step.continue_error => {
@@ -328,12 +365,15 @@ mod tests {
         Rule {
             id: 1,
             bundle: 2,
+            name: "Test".into(),
             version: "v1".into(),
             install_version: "content".into(),
             phase: "install".into(),
             trigger: trigger.into(),
             due: Some(100),
             requires: None,
+            step_names: vec![],
+            install_names: vec![],
             steps: vec![],
             install: vec![],
         }
@@ -374,4 +414,46 @@ mod tests {
         assert_eq!(state.jobs[&1].cursor, 0);
         assert!(!state.jobs[&1].completed);
     }
+}
+
+pub fn installed_catalog(dir: &Path, catalog: &mut serde_json::Value) -> Result<()> {
+    let user = State::load(dir)?;
+    let device: Option<BTreeMap<u64, String>> = crate::progress::machine_state()
+        .and_then(|p| fs::File::open(p).ok())
+        .and_then(|f| serde_json::from_reader(f).ok());
+    for entry in catalog["apps"]
+        .as_array_mut()
+        .context("Ungültiger Katalog")?
+    {
+        let id = entry["bundle"].as_u64().context("Bundle-ID fehlt")?;
+        let mut known = false;
+        let mut installed = false;
+        if let Some(version) = entry["user_install_version"].as_str() {
+            known = true;
+            installed = user.installed.get(&id).is_some_and(|x| x == version);
+        }
+        if let (Some(version), Some(receipts)) =
+            (entry["device_install_version"].as_str(), device.as_ref())
+        {
+            known = true;
+            installed |= receipts.get(&id).is_some_and(|x| x == version);
+        }
+        if let Some(path) = entry["icon_path"].as_str() {
+            let target = if path.eq_ignore_ascii_case(r"%SystemRoot%\explorer.exe") {
+                std::env::var_os("SystemRoot").map(|p| Path::new(&p).join("explorer.exe"))
+            } else {
+                std::env::var_os("ProgramFiles").map(|p| Path::new(&p).join(path))
+            };
+            if let Some(target) = target {
+                if !known || !target.is_file() {
+                    installed = target.is_file();
+                }
+                known = true;
+            }
+        }
+        if known {
+            entry["installed"] = installed.into();
+        }
+    }
+    Ok(())
 }

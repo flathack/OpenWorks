@@ -37,6 +37,15 @@ if (!$isDevice) {
 }
 function Install-Catalog {
     $gui = Join-Path $dest 'OpenWorks-Apps.exe'
+    $running = @(Get-Process -Name OpenWorks-Apps -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $gui })
+    if ($running.Count) {
+        foreach ($instance in $running) { $null = $instance.CloseMainWindow() }
+        $stillRunning = @($running | Where-Object { !$_.WaitForExit(1200) })
+        if ($stillRunning.Count) {
+            Start-Process -FilePath $gui -ArgumentList '--exit' -Wait -WindowStyle Hidden
+            foreach ($instance in $stillRunning) { if (!$instance.WaitForExit(4000)) { throw 'Katalog bitte schließen.' } }
+        }
+    }
     Copy-Item -LiteralPath $guiSource -Destination $gui -Force
     $menu = [Environment]::GetFolderPath('Programs')
     $shortcut = (New-Object -ComObject WScript.Shell).CreateShortcut((Join-Path $menu 'OpenWorks Anwendungen.lnk'))
@@ -44,17 +53,56 @@ function Install-Catalog {
     $shortcut.WorkingDirectory = $dest
     $shortcut.Save()
 }
+function Install-Background {
+    if ($isDevice) {
+        # This read-only status directory is separate from enrollment credentials.
+        $publicStatus = Join-Path $env:ProgramFiles 'OpenWorks\Status'
+        $null = New-Item -ItemType Directory -Path $publicStatus -Force
+        $service = Get-Service -Name OpenWorksAgent -ErrorAction SilentlyContinue
+        if (!$service) {
+            $null = New-Service -Name OpenWorksAgent -DisplayName 'OpenWorks Geräte-Agent' -Description 'Ruft Gerätezuweisungen ab und meldet den Installationsstatus.' -BinaryPathName ('"{0}" "{1}" service' -f $exe,$configPath) -StartupType Automatic
+        } else {
+            Set-Service -Name OpenWorksAgent -StartupType Automatic
+        }
+        Start-Service -Name OpenWorksAgent
+        (Get-Service OpenWorksAgent).WaitForStatus('Running',[TimeSpan]::FromSeconds(20))
+        $poll = Get-ScheduledTask -TaskName "$taskName-poll" -ErrorAction SilentlyContinue
+        if ($poll) { Unregister-ScheduledTask -TaskName $poll.TaskName -Confirm:$false }
+    } else {
+        $gui = Join-Path $dest 'OpenWorks-Apps.exe'
+        $startupDir = [Environment]::GetFolderPath('Startup')
+        $shortcut = (New-Object -ComObject WScript.Shell).CreateShortcut((Join-Path $startupDir 'OpenWorks Anwendungen.lnk'))
+        $shortcut.TargetPath = $gui
+        $shortcut.Arguments = '--tray'
+        $shortcut.WorkingDirectory = $dest
+        $shortcut.Save()
+        Start-Process -FilePath $gui -ArgumentList '--tray' -WindowStyle Hidden
+    }
+}
 if ($Update) {
     if (!(Test-Path -LiteralPath $configPath -PathType Leaf)) { throw 'Vorhandene Registrierung fehlt.' }
     if (!$isDevice) { Install-Catalog }
+    $previousService = $isDevice -and (Get-Service -Name OpenWorksAgent -ErrorAction SilentlyContinue)
     $staged = Join-Path $dest ('update-' + [Guid]::NewGuid() + '.exe')
+    $backup = Join-Path $dest 'agent.previous.exe'
+    $replaced = $false
     try {
         Copy-Item -LiteralPath $source -Destination $staged
-        [IO.File]::Replace($staged, $exe, (Join-Path $dest 'agent.previous.exe'))
+        if ($previousService) { Stop-Service OpenWorksAgent -ErrorAction Stop }
+        [IO.File]::Replace($staged, $exe, $backup)
+        $replaced = $true
+        Install-Background
+    } catch {
+        if ($previousService) {
+            Stop-Service OpenWorksAgent -ErrorAction SilentlyContinue
+            if ($replaced) { [IO.File]::Replace($backup, $exe, (Join-Path $dest 'agent.failed.exe')) }
+            Start-Service OpenWorksAgent
+        }
+        throw
     } finally {
         if (Test-Path -LiteralPath $staged) { Remove-Item -LiteralPath $staged }
     }
-    Start-ScheduledTask -TaskName "$taskName-poll"
+    if (!$isDevice) { Start-ScheduledTask -TaskName "$taskName-poll" }
     return
 }
 if (Test-Path -LiteralPath $configPath) { throw "Agent bereits eingerichtet: $dest" }
@@ -84,9 +132,12 @@ try {
     }
     Register-SyncTask 'login' $login
     $registered += 'login'
-    Register-SyncTask 'poll' (New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1) -RepetitionInterval (New-TimeSpan -Minutes 5))
-    $registered += 'poll'
-    Start-ScheduledTask -TaskName "$taskName-poll"
+    if (!$isDevice) {
+        Register-SyncTask 'poll' (New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1) -RepetitionInterval (New-TimeSpan -Minutes 5))
+        $registered += 'poll'
+        Start-ScheduledTask -TaskName "$taskName-poll"
+    }
+    Install-Background
 } catch {
     foreach ($eventName in $registered) { Unregister-ScheduledTask -TaskName "$taskName-$eventName" -Confirm:$false }
     Remove-Item -LiteralPath $configPath

@@ -100,6 +100,7 @@ pub fn filter_catalog(result: &mut serde_json::Value) -> Result<()> {
             return true;
         }
         app["launch"] = serde_json::Value::Null;
+        app["install"] = serde_json::Value::Null;
         app["unavailable"] = true.into();
         app["show_unmet"].as_bool() == Some(true)
     });

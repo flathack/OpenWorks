@@ -412,7 +412,7 @@ function assignmentEditor(id, initialBundle, group, scope) {
     const allowed = Object.entries(triggers).filter(
       ([k]) =>
         (k !== "boot" || !user) &&
-        (k !== "manual" || (user && $("#phase").value === "start")),
+        (k !== "manual" || (user && ["start", "install"].includes($("#phase").value))),
     );
     $("#trigger").innerHTML = options(Object.fromEntries(allowed));
     $("#trigger").value = allowed.some(([k]) => k === previous)

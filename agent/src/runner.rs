@@ -12,7 +12,13 @@ use tempfile::NamedTempFile;
 
 const MAX_PACKAGE: u64 = 512 * 1024 * 1024;
 
-fn package(config: &Config, dir: &Path, client: &Client, digest: &str) -> Result<PathBuf> {
+fn package(
+    config: &Config,
+    dir: &Path,
+    client: &Client,
+    digest: &str,
+    progress: &mut crate::progress::Progress,
+) -> Result<PathBuf> {
     ensure!(
         digest.len() == 64 && digest.bytes().all(|b| b.is_ascii_hexdigit()),
         "Invalid content hash"
@@ -27,12 +33,14 @@ fn package(config: &Config, dir: &Path, client: &Client, digest: &str) -> Result
             return Ok(path);
         }
     }
-    let mut response = client
+    let response = client
         .get(config.url(&format!("packages/{digest}")))
         .bearer_auth(&config.token)
         .send()?
-        .error_for_status()?
-        .take(MAX_PACKAGE + 1);
+        .error_for_status()?;
+    let total = response.content_length();
+    let mut response = response.take(MAX_PACKAGE + 1);
+    progress.download(0, total);
     let mut temp = NamedTempFile::new_in(cache)?;
     let mut hash = Sha256::new();
     let mut buffer = [0u8; 65536];
@@ -46,6 +54,7 @@ fn package(config: &Config, dir: &Path, client: &Client, digest: &str) -> Result
         ensure!(size <= MAX_PACKAGE, "Package exceeds size limit");
         temp.write_all(&buffer[..n])?;
         hash.update(&buffer[..n]);
+        progress.download(size, total);
     }
     ensure!(
         hex::encode(hash.finalize()) == digest,
@@ -53,6 +62,10 @@ fn package(config: &Config, dir: &Path, client: &Client, digest: &str) -> Result
     );
     temp.as_file().sync_all()?;
     temp.persist(&path)?;
+    progress.state = "working";
+    progress.bytes = None;
+    progress.done = 0;
+    progress.emit();
     Ok(path)
 }
 
@@ -134,6 +147,7 @@ pub fn execute(
     client: &Client,
     bundle: u64,
     step: &Step,
+    progress: &mut crate::progress::Progress,
 ) -> Result<bool> {
     ensure!(cfg!(windows), "This agent executes Windows actions only");
     if step.kind == "launch" {
@@ -177,21 +191,24 @@ pub fn execute(
         "uninstall" => "/x",
         "repair" => "/fomus",
         "cache" => {
-            package(config, dir, client, &step.value)?;
+            package(config, dir, client, &step.value, progress)?;
             return Ok(false);
         }
         _ => bail!("Unknown action type"),
     };
-    let install = step.kind == "install";
-    let file = package(config, dir, client, &step.value)?;
+
+    let file = package(config, dir, client, &step.value, progress)?;
+    #[cfg(windows)]
+    if step.kind == "install" {
+        return match crate::msi::install(&file, config.scope == "user", progress)? {
+            0 => Ok(false),
+            3010 | 1641 => Ok(true),
+            code => bail!("Windows Installer exit code {code}"),
+        };
+    }
     let root = env::var_os("SystemRoot").context("SystemRoot missing")?;
     let mut cmd = Command::new(Path::new(&root).join("System32/msiexec.exe"));
     cmd.arg(switch).arg(file).args(["/qn", "/norestart"]);
-    if install && config.scope == "user" {
-        cmd.args(["ALLUSERS=2", "MSIINSTALLPERUSER=1"]);
-    } else if install {
-        cmd.arg("ALLUSERS=1");
-    }
     match cmd.status()?.code() {
         Some(0) => Ok(false),
         Some(3010) | Some(1641) => Ok(true),

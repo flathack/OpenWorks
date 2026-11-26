@@ -17,8 +17,9 @@ namespace OpenWorks {
     }
     public class Entry {
         public int bundle;
-        public long? launch;
-        public bool unavailable;
+        public long? launch, install;
+        public bool? installed;
+        public bool unavailable, device;
         public string name, description, symbol, icon_path;
         public string[] phases;
     }
@@ -72,10 +73,22 @@ namespace OpenWorks {
         Color ink = Color.White;
         Color accent = Color.DeepSkyBlue;
 
-        public Window() {
+        readonly NotifyIcon tray=new NotifyIcon {Icon=SystemIcons.Application,Text="OpenWorks Anwendungen"};
+        readonly Timer activityTimer=new Timer {Interval=400};
+        readonly Dictionary<int,ProgressBar> bars=new Dictionary<int,ProgressBar>();
+        readonly Button activityButton=new Button {Text="Fortschritt",AutoSize=true};
+        ActivityWindow activityWindow;
+        Activity[] latest=new Activity[0];
+        string finished;
+        bool exitRequested;
+        readonly bool startHidden;
+        readonly System.Threading.EventWaitHandle showSignal, exitSignal;
+
+        public Window(bool background,System.Threading.EventWaitHandle show,System.Threading.EventWaitHandle exit) {
+            startHidden=background;showSignal=show;exitSignal=exit;
             Text = "OpenWorks Anwendungen"; Size = new Size(930,620); MinimumSize = new Size(590,350);
             Font = new Font("Segoe UI", 9); StartPosition = FormStartPosition.CenterScreen;
-            toolbar.Controls.AddRange(new Control[] {identity, favorites, layout, reload, searchLabel, search});
+            toolbar.Controls.AddRange(new Control[] {identity, favorites, layout, reload, activityButton, searchLabel, search});
             Controls.Add(canvas); Controls.Add(toolbar); Controls.Add(banner); Controls.Add(status);
             var file = Path.Combine(root,"favorites.txt");
             if (File.Exists(file)) foreach (var line in File.ReadAllLines(file)) {
@@ -86,10 +99,45 @@ namespace OpenWorks {
             layout.Click += (s,e) => { list = !list; DrawCatalog(); };
             reload.Click += async (s,e) => await RefreshCatalog();
             timer.Tick += async (s,e) => await RefreshCatalog();
-            Shown += async (s,e) => { await RefreshCatalog(); timer.Start(); };
-            FormClosed += (s,e) => { timer.Dispose(); tips.Dispose(); };
+            var menu=new ContextMenuStrip();
+            menu.Items.Add("Anwendungen öffnen",null,(s,e)=>ShowCatalog());
+            menu.Items.Add("Fortschritt anzeigen",null,(s,e)=>ShowActivity());
+            menu.Items.Add("Katalog beenden",null,(s,e)=>{exitRequested=true;Close();});
+            tray.ContextMenuStrip=menu;tray.DoubleClick+=(s,e)=>ShowCatalog();tray.Visible=true;
+            activityButton.Click+=(s,e)=>ShowActivity();
+            activityTimer.Tick+=async (s,e)=>{
+                if(exitSignal.WaitOne(0)){exitRequested=true;Close();return;}
+                if(showSignal.WaitOne(0))ShowCatalog();
+                await ReadActivity();
+            };
+            FormClosing+=(s,e)=>{if(e.CloseReason==CloseReason.UserClosing && !exitRequested){e.Cancel=true;Hide();}};
+            Shown += async (s,e) => { if(startHidden)Hide(); activityTimer.Start();await RefreshCatalog();timer.Start(); };
+            FormClosed += (s,e) => { timer.Dispose();activityTimer.Dispose();tray.Visible=false;tray.Dispose();menu.Dispose();if(activityWindow!=null)activityWindow.Dispose();tips.Dispose(); };
         }
 
+        void ShowCatalog(){ Show();WindowState=FormWindowState.Normal;Activate(); }
+        void ShowActivity(){
+            if(activityWindow==null || activityWindow.IsDisposed)activityWindow=new ActivityWindow();
+            activityWindow.UpdateRows(latest);activityWindow.Show();activityWindow.WindowState=FormWindowState.Normal;activityWindow.Activate();
+        }
+        async Task ReadActivity(){
+            if(catalog==null)return;
+            string programs=Environment.GetEnvironmentVariable("ProgramW6432")??Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles);
+            var local=ActivityFiles.Read(Path.Combine(root,"progress.json"),json);
+            var machine=ActivityFiles.Read(Path.Combine(programs,"OpenWorks","Status","progress.json"),json);
+            latest=new[]{local,machine}.Where(a=>a!=null && catalog.apps.Any(entry=>entry.bundle==a.bundle && (a==local || entry.device))).OrderByDescending(a=>a.updated).ToArray();
+            foreach(var pair in bars){
+                var active=latest.FirstOrDefault(a=>a.bundle==pair.Key && a.Active);
+                var bar=pair.Value;bar.Visible=active!=null;
+                if(active!=null){
+                    bar.Style=active.state=="msi" || (active.state=="download" && active.bytes.HasValue) ? ProgressBarStyle.Continuous : ProgressBarStyle.Marquee;
+                    bar.Value=active.Percent;tips.SetToolTip(bar,active.Detail);
+                }
+            }
+            if(activityWindow!=null && !activityWindow.IsDisposed)activityWindow.UpdateRows(latest);
+            var done=String.Join(";",latest.Where(a=>!a.Active).Select(a=>a.bundle+"-"+a.updated+"-"+a.state));
+            if(!busy && done!=finished){bool reloadNeeded=finished!=null && done.Length>0;finished=done;if(reloadNeeded)await RefreshCatalog();}
+        }
         async Task<string> Agent(string verb) {
             var start = new ProcessStartInfo(Path.Combine(root, "openworks-agent.exe"),
                 "\"" + Path.Combine(root, "agent.json") + "\" " + verb) {
@@ -137,13 +185,16 @@ namespace OpenWorks {
         async Task Launch(Entry app) {
             if (busy) return;
             if (app.unavailable) { status.Text = "Systemanforderungen nicht erfüllt."; return; }
-            if (!app.launch.HasValue) {
+            var request=app.launch ?? app.install;
+            if(!app.launch.HasValue && app.installed==true && app.install.HasValue){status.Text=app.name+" ist installiert.";return;}
+            if (!request.HasValue) {
                 status.Text = "Die Ausführung dieser Anwendung wird durch ihre Zuweisung gesteuert."; return;
             }
             busy = true; reload.Enabled = false; status.Text = app.name + " wird gestartet …";
-            try { await Agent("launch " + app.launch.Value); status.Text = app.name + " gestartet."; }
+            try { await Agent("launch " + request.Value);status.Text=app.name+(app.launch.HasValue?" gestartet.":" installiert."); }
             catch (Exception ex) { status.Text = "Start fehlgeschlagen: " + ex.Message; }
-            finally { busy = false; reload.Enabled = true; }
+            finally { busy=false;reload.Enabled=true; }
+            await RefreshCatalog();
         }
 
         static string Glyph(string key) {
@@ -178,7 +229,7 @@ namespace OpenWorks {
         void DrawCatalog() {
             if (catalog == null) return;
             canvas.SuspendLayout();
-            tips.RemoveAll();
+            tips.RemoveAll();bars.Clear();
             while (canvas.Controls.Count != 0) canvas.Controls[0].Dispose();
             canvas.FlowDirection = list ? FlowDirection.TopDown : FlowDirection.LeftToRight;
             canvas.WrapContents = !list;
@@ -193,11 +244,20 @@ namespace OpenWorks {
                     AccessibleName = app.name, Dock = DockStyle.Fill, FlatStyle = FlatStyle.Flat, ForeColor = ink,
                     TextAlign = list ? ContentAlignment.MiddleLeft : ContentAlignment.MiddleCenter,
                     BackColor = canvas.Theme == "light" ? Color.FromArgb(227,239,246) : Color.FromArgb(30,49,72) };
+                if (app.installed==false){
+                    using(var g=Graphics.FromImage(button.Image)) {
+                        g.FillRectangle(Brushes.DimGray,0,0,13,13);
+                        TextRenderer.DrawText(g,"×",Font,new Rectangle(0,-2,14,15),Color.White,TextFormatFlags.HorizontalCenter|TextFormatFlags.NoPadding);
+                    }
+                    button.AccessibleDescription="Nicht installiert";
+                }
                 button.FlatAppearance.BorderColor = accent;
                 button.Disposed += (s,e) => { if (button.Image != null) button.Image.Dispose(); };
                 tips.SetToolTip(button, app.description + (app.unavailable ? "  ·  Systemanforderungen nicht erfüllt" : app.launch.HasValue ? "  ·  Starten" : "  ·  Regelgesteuert"));
                 button.Click += async (s,e) => await Launch(app);
                 tile.Controls.Add(button);
+                var bar=new ProgressBar {Width=list?36:48,Height=5,Location=list?new Point(7,37):new Point(40,54),Visible=false,AccessibleName="Fortschritt "+app.name};
+                bars[app.bundle]=bar;tile.Controls.Add(bar);bar.BringToFront();bar.Click+=(s,e)=>ShowActivity();
                 if (catalog.policy.favorites) {
                     var pin = new Button { Text = pinned.Contains(app.bundle) ? "★" : "☆", Size = new Size(23,23),
                         Location = new Point(tile.Width-24,1), FlatStyle = FlatStyle.Flat, BackColor = button.BackColor,
@@ -215,9 +275,20 @@ namespace OpenWorks {
     }
 
     class Program {
-        [STAThread] static void Main() {
+        [STAThread] static void Main(string[] args) {
             Application.EnableVisualStyles(); Application.SetCompatibleTextRenderingDefault(false);
-            Application.Run(new Window());
+            string fingerprint;
+            using(var hash=System.Security.Cryptography.SHA256.Create())
+                fingerprint=BitConverter.ToString(hash.ComputeHash(Encoding.UTF8.GetBytes(AppDomain.CurrentDomain.BaseDirectory.ToUpperInvariant()))).Replace("-","");
+            var prefix=@"Local\OpenWorksCatalog-"+fingerprint;
+            bool first;
+            using(var single=new System.Threading.Mutex(true,prefix,out first))
+            using(var show=new System.Threading.EventWaitHandle(false,System.Threading.EventResetMode.AutoReset,prefix+"-show"))
+            using(var exit=new System.Threading.EventWaitHandle(false,System.Threading.EventResetMode.AutoReset,prefix+"-exit")){
+                if(args.Contains("--exit")){if(!first)exit.Set();return;}
+                if(!first){if(!args.Contains("--tray"))show.Set();return;}
+                Application.Run(new Window(args.Contains("--tray"),show,exit));
+            }
         }
     }
 }

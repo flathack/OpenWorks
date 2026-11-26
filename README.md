@@ -4,7 +4,7 @@ OpenWorks ist eine selbst gehostete Softwareverteilung für Windows. Administrat
 
 ## Funktionsumfang
 
-| Bereich | Verhalten in Version 0.3 |
+| Bereich | Verhalten in Version 0.4 |
 | --- | --- |
 | Install | Geordnete Liste von MSI-Paketen aus dem Serverkatalog. Der Agent prüft jede Datei vor der Verwendung per SHA-256. |
 | Start | Geordnete Liste installierter EXE-Dateien unter `Program Files`. Der Benutzer-Agent arbeitet bei Bedarf zuerst die Install-Liste ab und startet die Anwendungen in der interaktiven Sitzung. |
@@ -25,6 +25,12 @@ Unter **Bundles → Bundle anlegen** den Namen und Ordner wählen. Der Reiter **
 - **Einstellungen** zeigt globale und lokale Variablen. Lokale Werte überschreiben gleichnamige globale Werte. Ein Wert kann weitere Variablen referenzieren. `${ProgramFiles}` und `${SystemRoot}` stehen als Windows-Pfadvariablen zur Verfügung.
 
 Für erweiterte Aktionslisten und Anforderungen wird Agent 0.3.0 benötigt. Ältere Agenten erhalten weiterhin kompatible Zuweisungen.
+
+## Windows-Dienst und Fortschrittsanzeige
+
+Ab Agent 0.4.0 richtet der Geräte-Installer den automatisch startenden Dienst **OpenWorks Geräte-Agent** ein. Der Benutzer-Installer hinterlegt den Anwendungskatalog im Autostart der Benutzersitzung. Das Schließen des Fensters minimiert den Katalog in den Infobereich. Ein Doppelklick auf das Symbol öffnet ihn erneut.
+
+Ein **×** kennzeichnet eine ausstehende Installation. Bei einer reinen Startanwendung prüft der Katalog den Zielpfad. Bei verwalteten Installationen vergleicht er die lokal quittierte Installationsversion mit dem zugewiesenen Stand. Eine manuelle Benutzerzuweisung für **Installieren** oder **Starten** lässt sich über die Kachel ausführen. Über **Fortschritt** in der Symbolleiste oder im Kontextmenü des Infobereichs erscheinen Downloadgröße, Prozentsatz und der aktuelle Aktionsschritt. Windows Installer liefert während der MSI-Installation eigene Fortschrittswerte. Gerätefortschritt wird für gekoppelte Geräte-Bundles angezeigt.
 
 ## Server unter Windows starten
 
@@ -77,7 +83,7 @@ Die von Tailscale ausgegebene HTTPS-Adresse dient der Webkonsole und dem Agenten
 
    Für die Benutzereinrichtung den Befehl mit `-Scope user` in der Sitzung des zugewiesenen Windows-Benutzers ausführen. Das Skript fragt das Token verdeckt ab. Auf demselben PC können beide Agenten parallel arbeiten.
 
-4. Der Geräte-Agent läuft als SYSTEM, der Benutzer-Agent mit eingeschränkten Benutzerrechten. Windows-Aufgaben lösen Boot, Anmeldung und einen Abruf alle fünf Minuten aus. Ein Benutzer-MSI muss die Installation ohne erhöhte Rechte unterstützen. Bei mehreren Benutzerinstallationen mit gleicher Zielkennung erhält jede Installation die Zuweisungen.
+4. Der Geräte-Agent läuft als SYSTEM, der Benutzer-Agent mit eingeschränkten Benutzerrechten. Der automatische Windows-Dienst `OpenWorksAgent` ruft Gerätezuweisungen nach jedem abgeschlossenen Abruf im Minutenabstand ab. Aufgaben erfassen Boot und Anmeldung. Benutzerzuweisungen werden zusätzlich alle fünf Minuten geprüft. Ein Benutzer-MSI muss die Installation ohne erhöhte Rechte unterstützen. Bei mehreren Benutzerinstallationen mit gleicher Zielkennung erhält jede Installation die Zuweisungen.
 
 ## Anwendungskatalog und Objektseiten
 
