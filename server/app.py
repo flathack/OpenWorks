@@ -122,10 +122,30 @@ def create_app(directory, secure=False):
 
     @app.get("/api/admin/state")
     def state():
-        bundles = rows("SELECT * FROM bundles ORDER BY name")
+        bundles = rows("""SELECT b.*, c.folder, COALESCE(c.category,'') AS category,
+                          COALESCE(c.enabled,1) AS enabled FROM bundles b
+                          LEFT JOIN bundle_catalog c ON c.bundle=b.id ORDER BY b.name""")
+        latest = {r["bundle"]: r["status"] for r in rows("""
+            SELECT bundle,status FROM (
+                SELECT a.bundle,r.status,ROW_NUMBER() OVER (
+                    PARTITION BY a.bundle ORDER BY r.seen DESC,r.assignment DESC,r.agent DESC
+                ) AS position FROM reports r JOIN assignments a ON a.id=r.assignment
+            ) WHERE position=1""")}
         for bundle in bundles:
             bundle.update(json.loads(bundle.pop("body")))
-        return jsonify(bundles=bundles, variables=globals_(), csrf=session["csrf"],
+            bundle["report_status"] = latest.get(bundle["id"])
+        groups = rows("SELECT * FROM bundle_groups ORDER BY name")
+        members = {group["id"]: [] for group in groups}
+        for member in rows("SELECT * FROM group_members ORDER BY bundle"):
+            members[member["group_id"]].append(member["bundle"])
+        for group in groups:
+            group["members"] = members[group["id"]]
+        drafts = rows("SELECT * FROM sandbox")
+        for draft in drafts:
+            draft.update(json.loads(draft.pop("body")))
+        return jsonify(bundles=bundles, error_count=db().execute("SELECT COUNT(*) FROM reports WHERE status='error'").fetchone()[0],
+                       folders=rows("SELECT * FROM folders ORDER BY name"),
+                       groups=groups, drafts=drafts, variables=globals_(), csrf=session["csrf"],
                        packages=rows("SELECT * FROM packages ORDER BY name"),
                        agents=rows("SELECT id,scope,principal,label,last_seen FROM agents ORDER BY label"),
                        assignments=rows("SELECT * FROM assignments ORDER BY id"),
@@ -173,6 +193,11 @@ def create_app(directory, secure=False):
             path.unlink(missing_ok=True)
         return jsonify(ok=True), 201
 
+    def require_phase_lists(key, body):
+        for rule in rows("SELECT DISTINCT phase FROM assignments WHERE bundle=?", (key,)):
+            if not body["actions"][rule["phase"]]:
+                abort(400, "Eine zugewiesene Aktionsliste muss mindestens eine Aktion enthalten.")
+
     @app.post("/api/admin/bundles")
     def save_bundle():
         data = payload()
@@ -181,9 +206,7 @@ def create_app(directory, secure=False):
         compile_actions(body, globals_(), packages())
         raw = json.dumps(body)
         if data.get("id"):
-            for rule in rows("SELECT DISTINCT phase FROM assignments WHERE bundle=?", (data["id"],)):
-                if not body["actions"][rule["phase"]]:
-                    abort(400, "Eine zugewiesene Aktionsliste muss mindestens eine Aktion enthalten.")
+            require_phase_lists(data["id"], body)
             cur = db().execute("UPDATE bundles SET name=?,body=?,revision=revision+1 WHERE id=? AND revision=?",
                                (name, raw, data["id"], data.get("revision")))
             if not cur.rowcount:
@@ -191,8 +214,104 @@ def create_app(directory, secure=False):
             key = data["id"]
         else:
             key = db().execute("INSERT INTO bundles(name,revision,body) VALUES (?,1,?)", (name, raw)).lastrowid
+        if "folder" in data or "category" in data:
+            category = data.get("category", "")
+            if not isinstance(category, str) or len(category) > 100:
+                abort(400, "Ungültige Kategorie.")
+            db().execute("""INSERT INTO bundle_catalog(bundle,folder,category) VALUES (?,?,?)
+                            ON CONFLICT(bundle) DO UPDATE SET folder=excluded.folder,category=excluded.category""",
+                         (key, data.get("folder"), category.strip()))
         db().commit()
         return jsonify(id=key)
+
+    @app.post("/api/admin/folders")
+    def save_folder():
+        data = payload()
+        name = string(data.get("name"), "Ordnername")
+        if data.get("id"):
+            cur = db().execute("UPDATE folders SET name=? WHERE id=?", (name, data["id"]))
+            if not cur.rowcount:
+                abort(404)
+        else:
+            db().execute("INSERT INTO folders(name,parent) VALUES (?,?)", (name, data.get("parent")))
+        db().commit()
+        return jsonify(ok=True)
+
+    def ids(value):
+        if not isinstance(value, list) or any(type(i) is not int or i < 1 for i in value):
+            abort(400, "Ungültige Auswahl.")
+        return list(dict.fromkeys(value))
+
+    @app.post("/api/admin/groups")
+    def save_group():
+        data = payload()
+        name = string(data.get("name"), "Gruppenname")
+        members = ids(data.get("members"))
+        key = data.get("id")
+        if key:
+            if not db().execute("UPDATE bundle_groups SET name=?,folder=? WHERE id=?",
+                                (name, data.get("folder"), key)).rowcount:
+                abort(404)
+            db().execute("DELETE FROM group_members WHERE group_id=?", (key,))
+        else:
+            key = db().execute("INSERT INTO bundle_groups(name,folder) VALUES (?,?)",
+                               (name, data.get("folder"))).lastrowid
+        db().executemany("INSERT INTO group_members VALUES (?,?)", [(key, i) for i in members])
+        db().commit()
+        return jsonify(id=key)
+
+    @app.post("/api/admin/catalog")
+    def catalog_action():
+        data = payload()
+        keys = ids(data.get("ids"))
+        action = data.get("action")
+        if not keys or action not in ("move", "enable", "disable", "delete"):
+            abort(400, "Bundles und Aktion auswählen.")
+        for key in keys:
+            if not db().execute("SELECT 1 FROM bundles WHERE id=?", (key,)).fetchone():
+                abort(409, "Die Auswahl wurde inzwischen geändert.")
+            if action == "delete":
+                db().execute("DELETE FROM bundles WHERE id=?", (key,))
+            else:
+                db().execute("INSERT OR IGNORE INTO bundle_catalog(bundle) VALUES (?)", (key,))
+                if action == "move":
+                    db().execute("UPDATE bundle_catalog SET folder=? WHERE bundle=?", (data.get("folder"), key))
+                else:
+                    db().execute("UPDATE bundle_catalog SET enabled=? WHERE bundle=?", (action == "enable", key))
+        db().commit()
+        return jsonify(ok=True)
+
+    @app.post("/api/admin/sandbox/<int:key>")
+    def sandbox(key):
+        data = payload()
+        bundle = db().execute("SELECT revision FROM bundles WHERE id=?", (key,)).fetchone()
+        if not bundle:
+            abort(404)
+        draft = db().execute("SELECT * FROM sandbox WHERE bundle=?", (key,)).fetchone()
+        if data.get("stamp") != (draft["stamp"] if draft else None):
+            abort(409, "Die Sandbox wurde inzwischen geändert.")
+        action = data.get("action")
+        if action == "discard" and draft:
+            db().execute("DELETE FROM sandbox WHERE bundle=?", (key,))
+        elif action == "save":
+            if data.get("base") != bundle["revision"]:
+                abort(409, "Die Ausgangsversion hat sich geändert.")
+            body = bundle_body(data)
+            compile_actions(body, globals_(), packages())
+            db().execute("INSERT OR REPLACE INTO sandbox VALUES (?,?,?,?)",
+                         (key, bundle["revision"], secrets.token_hex(12), json.dumps(body)))
+        elif action == "publish" and draft:
+            if draft["base"] != bundle["revision"]:
+                abort(409, "Neuere Version vorhanden. Sandbox prüfen und neu anlegen.")
+            body = json.loads(draft["body"])
+            require_phase_lists(key, body)
+            compile_actions(body, globals_(), packages())
+            db().execute("UPDATE bundles SET body=?,revision=revision+1 WHERE id=?", (draft["body"], key))
+            db().execute("DELETE FROM sandbox WHERE bundle=?", (key,))
+        else:
+            abort(400, "Ungültige Sandbox-Aktion.")
+        db().commit()
+        return jsonify(ok=True)
 
     @app.post("/api/admin/agents")
     def new_agent():
@@ -222,9 +341,26 @@ def create_app(directory, secure=False):
             abort(400, "Zeitpunkt fehlt.")
         if not db().execute("SELECT 1 FROM agents WHERE scope=? AND principal=?", (scope, principal)).fetchone():
             abort(400, "Unbekanntes Ziel.")
-        bundle = db().execute("SELECT body FROM bundles WHERE id=?", (data.get("bundle"),)).fetchone()
-        if not bundle or not json.loads(bundle[0])["actions"][phase]:
-            abort(400, "Die gewählte Aktionsliste ist leer.")
+        if data.get("group") is not None:
+            if data.get("id") or data.get("bundle"):
+                abort(400)
+            members = rows("SELECT bundle FROM group_members WHERE group_id=? ORDER BY bundle", (data["group"],))
+            if not members:
+                abort(400, "Die Gruppe enthält keine Bundles.")
+            keys = [m["bundle"] for m in members]
+            if "members" in data and sorted(ids(data["members"])) != keys:
+                abort(409, "Die Gruppenmitglieder haben sich geändert. Bitte neu laden.")
+        else:
+            keys = [data.get("bundle")]
+        for key in keys:
+            bundle = db().execute("SELECT name,body FROM bundles WHERE id=?", (key,)).fetchone()
+            if not bundle or not json.loads(bundle["body"])["actions"][phase]:
+                abort(400, "Die gewählte Aktionsliste muss in jedem Bundle befüllt sein.")
+        if data.get("group") is not None:
+            db().executemany("INSERT INTO assignments(bundle,scope,principal,phase,trigger,due) VALUES (?,?,?,?,?,?)",
+                             [(key, scope, principal, phase, trigger, due) for key in keys])
+            db().commit()
+            return jsonify(created=len(keys)), 201
         fields = (data["bundle"], scope, principal, phase, trigger, due)
         if data.get("id"):
             old = db().execute("SELECT bundle,scope,principal,phase,trigger,due FROM assignments WHERE id=? AND generation=?",
@@ -242,8 +378,10 @@ def create_app(directory, secure=False):
 
     @app.delete("/api/admin/<kind>/<int:key>")
     def remove(kind, key):
-        if kind not in ("agents", "assignments", "bundles"):
+        if kind not in ("agents", "assignments", "bundles", "folders", "groups"):
             abort(404)
+        if kind == "groups":
+            kind = "bundle_groups"
         cur = db().execute(f"DELETE FROM {kind} WHERE id=?", (key,))
         if not cur.rowcount:
             abort(404)
@@ -253,7 +391,9 @@ def create_app(directory, secure=False):
     def manifest():
         items = rows("""SELECT a.id,a.bundle,a.phase,a.trigger,a.due,a.generation,b.name,b.revision,b.body
                         FROM assignments a JOIN bundles b ON b.id=a.bundle
-                        WHERE a.scope=? AND a.principal=? ORDER BY a.id""", (g.agent["scope"], g.agent["principal"]))
+                        LEFT JOIN bundle_catalog c ON c.bundle=b.id
+                        WHERE COALESCE(c.enabled,1)=1 AND a.scope=? AND a.principal=? ORDER BY a.id""",
+                     (g.agent["scope"], g.agent["principal"]))
         catalog, values = packages(), globals_()
         for item in items:
             actions = compile_actions(json.loads(item.pop("body")), values, catalog)

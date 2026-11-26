@@ -2,13 +2,18 @@
 
 const $ = (selector, root = document) => root.querySelector(selector);
 const sections = {
+  dashboard: ["Startseite", "M3 10L12 3l9 7M6 9v12h5v-7h3v7h4V9"],
   bundles: ["Bundles", "m3 7 9-4 9 4-9 4-9-4zm0 0v10l9 4 9-4V7m-9 4v10"],
   assignments: [
     "Zuweisungen",
     "M4 6h9m-3-3 3 3-3 3M20 18h-9m3-3-3 3 3 3M4 18h3M17 6h3",
   ],
   packages: ["MSI-Pakete", "M4 4h16v16H4zM8 8h8m-8 4h5"],
-  agents: ["Agenten", "M3 4h18v13H3zM8 21h8m-4-4v4"],
+  users: [
+    "Benutzer",
+    "M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8zm-8 9a8 8 0 0 1 16 0",
+  ],
+  devices: ["Geräte", "M3 4h18v13H3zM8 21h8m-4-4v4"],
   variables: ["Variablen", "M8 4H6v6l-2 2 2 2v6h2m8-16h2v6l2 2-2 2v6h-2"],
   reports: ["Ausführungen", "M4 3h16v18H4zm3 11 3 3 6-7"],
 };
@@ -128,23 +133,6 @@ function toolbar(action, text, search = false) {
     "</button></div>"
   );
 }
-function bundleTable(filter = "") {
-  return table(
-    ["Bundle", "Revision", "Aktionen", "Zuweisungen", ""],
-    state.bundles
-      .filter((b) => b.name.toLowerCase().includes(filter.toLowerCase()))
-      .map((b) => [
-        esc(b.name),
-        badge("R" + b.revision),
-        Object.values(b.actions).flat().length,
-        state.assignments.filter((a) => a.bundle === b.id).length,
-        btn("bundle", "Bearbeiten", b.id) +
-          btn("del-bundles", "Entfernen", b.id),
-      ]),
-    filter ? "Keine passenden Bundles" : "Noch keine Bundles",
-    filter ? "" : "Lege ein Bundle an und stelle seine Aktionen zusammen.",
-  );
-}
 function render() {
   $("nav").innerHTML = Object.entries(sections)
     .map(
@@ -164,27 +152,10 @@ function render() {
   let html;
   switch (section) {
     case "bundles":
-      html =
-        '<div class="gridstats">' +
-        [
-          ["Bundles", state.bundles.length],
-          ["Zuweisungen", state.assignments.length],
-          ["Agenten", state.agents.length],
-        ]
-          .map(
-            ([name, n]) =>
-              '<div class="stat"><span>' +
-              name +
-              "</span><strong>" +
-              n +
-              "</strong></div>",
-          )
-          .join("") +
-        "</div>" +
-        toolbar("bundle", "Bundle anlegen", true) +
-        '<div id="bundle-table">' +
-        bundleTable() +
-        "</div>";
+      html = catalogPage();
+      break;
+    case "dashboard":
+      html = dashboardPage();
       break;
     case "packages":
       html =
@@ -204,18 +175,23 @@ function render() {
           "Lade ein MSI hoch, um es in Install- und Uninstall-Aktionen zu verwenden.",
         );
       break;
-    case "agents":
+    case "users":
+    case "devices":
       html =
         toolbar("agent", "Agent registrieren") +
         table(
           ["Installation", "Zieltyp", "Ziel", "Letzter Abruf", ""],
-          state.agents.map((a) => [
-            esc(a.label),
-            badge(scopes[a.scope]),
-            esc(a.principal),
-            time(a.last_seen),
-            btn("del-agents", "Zugang widerrufen", a.id),
-          ]),
+          state.agents
+            .filter(
+              (a) => a.scope === (section === "users" ? "user" : "device"),
+            )
+            .map((a) => [
+              esc(a.label),
+              badge(scopes[a.scope]),
+              esc(a.principal),
+              time(a.last_seen),
+              btn("del-agents", "Zugang widerrufen", a.id),
+            ]),
           "Noch keine Agenten",
           "Registriere ein Gerät oder eine Benutzerinstallation, um ein Token zu erhalten.",
         );
@@ -270,10 +246,14 @@ function render() {
       break;
   }
   $("#page").innerHTML = html;
-  $("#search")?.addEventListener(
-    "input",
-    (e) => ($("#bundle-table").innerHTML = bundleTable(e.target.value)),
-  );
+  drawSidebar();
+  document.querySelectorAll(".workspace-tabs button").forEach((button) => {
+    button.setAttribute(
+      "aria-current",
+      button.dataset.section === section ? "page" : "false",
+    );
+  });
+  if (section === "bundles") bindCatalog();
 }
 function dialog(title, fields, handler, save = "Speichern") {
   $("#modal-title").textContent = title;
@@ -320,24 +300,45 @@ function variableEditor(values) {
     },
   };
 }
-function bundleEditor(id) {
+function bundleEditor(id, sandbox = false) {
   const b = state.bundles.find((b) => b.id === id) ?? {
     name: "",
     actions: { install: [], start: [], uninstall: [] },
     variables: {},
   };
-  const actions = structuredClone(b.actions);
-  const vars = variableEditor(b.variables);
+  const draft = sandbox && state.drafts.find((d) => d.bundle === id);
+  const actions = structuredClone((draft || b).actions);
+  const vars = variableEditor((draft || b).variables);
   let phase = "install";
   dialog(
-    id ? "Bundle bearbeiten" : "Bundle anlegen",
-    '<label>Bundle-Name<input id="bname" maxlength="180" required></label><h3>Aktionslisten</h3><div class="tabs" id="phases"></div><p id="help" class="sub"></p><div id="steps"></div><datalist id="pkgs">' +
+    sandbox
+      ? "Sandbox bearbeiten"
+      : id
+        ? "Bundle bearbeiten"
+        : "Bundle anlegen",
+    '<label>Bundle-Name<input id="bname" maxlength="180" required></label>' +
+      (sandbox
+        ? '<p class="sub">Dieser Entwurf wird erst nach der Veröffentlichung verteilt.</p>'
+        : '<div class="pair"><label>Ordner<select id="bundle-folder">' +
+          folderOptions(b.id ? b.folder : catalog.folder) +
+          '</select></label><label>Kategorie<input id="category" maxlength="100"></label></div>') +
+      '<h3>Aktionslisten</h3><div class="tabs" id="phases"></div><p id="help" class="sub"></p><div id="steps"></div><datalist id="pkgs">' +
       state.packages
         .map((p) => '<option value="' + esc(p.name) + '">')
         .join("") +
       '</datalist><button type="button" class="secondary" id="add-step">Aktion hinzufügen</button><h3>Bundle-Variablen</h3><div id="bundle-vars"></div>',
     async () => {
+      if (sandbox)
+        return api("admin/sandbox/" + id, "POST", {
+          action: "save",
+          stamp: draft?.stamp,
+          base: draft?.base ?? b.revision,
+          variables: vars.read(),
+          actions,
+        });
       await api("admin/bundles", "POST", {
+        folder: Number($("#bundle-folder").value) || null,
+        category: $("#category").value,
         id: b.id,
         revision: b.revision,
         name: $("#bname").value,
@@ -347,6 +348,8 @@ function bundleEditor(id) {
     },
   );
   $("#bname").value = b.name;
+  $("#bname").readOnly = sandbox;
+  if (!sandbox) $("#category").value = b.category || "";
   $("#bundle-vars").append(vars.box);
   function draw() {
     $("#phases").replaceChildren();
@@ -407,7 +410,7 @@ function bundleEditor(id) {
   };
   draw();
 }
-function assignmentEditor(id) {
+function assignmentEditor(id, initialBundle, group) {
   const current = state.assignments.find((a) => a.id === id);
   if (!state.agents.length || !state.bundles.length)
     return notice("Zuerst ein Bundle und einen Agenten anlegen.");
@@ -421,7 +424,9 @@ function assignmentEditor(id) {
         generation: current?.generation,
         scope: a.scope,
         principal: a.principal,
-        bundle: Number($("#bundle").value),
+        bundle: group ? undefined : Number($("#bundle").value),
+        group: group?.id,
+        members: group?.members,
         phase: $("#phase").value,
         trigger: $("#trigger").value,
         due: $("#due").value
@@ -433,6 +438,16 @@ function assignmentEditor(id) {
   $("#bundle").innerHTML = options(
     Object.fromEntries(state.bundles.map((b) => [b.id, b.name])),
   );
+  if (group) {
+    $("#bundle").innerHTML = options({ group: group.name });
+    $("#bundle").disabled = true;
+    $("#fields").insertAdjacentHTML(
+      "afterbegin",
+      "<p>Erstellt eine eigene Zuweisung für jedes der " +
+        group.members.length +
+        " aktuellen Gruppenmitglieder.</p>",
+    );
+  } else if (initialBundle) $("#bundle").value = initialBundle;
   const targets = new Map(
     state.agents.map((a) => [a.scope + ":" + a.principal.toLowerCase(), a]),
   );
@@ -448,11 +463,16 @@ function assignmentEditor(id) {
     const user =
       state.agents.find((a) => a.id === Number($("#target").value)).scope ===
       "user";
-    const b = state.bundles.find((b) => b.id === Number($("#bundle").value));
+    const members = group
+      ? state.bundles.filter((b) => group.members.includes(b.id))
+      : state.bundles.filter((b) => b.id === Number($("#bundle").value));
     $("#phase").innerHTML = options(
       Object.fromEntries(
         Object.entries(phases).filter(
-          ([p]) => b.actions[p].length && (user || p !== "start"),
+          ([p]) =>
+            members.length &&
+            members.every((b) => b.actions[p].length) &&
+            (user || p !== "start"),
         ),
       ),
     );
@@ -523,6 +543,7 @@ function agentEditor() {
     },
     "Token erstellen",
   );
+  $("#scope").value = section === "users" ? "user" : "device";
 }
 async function handle(action, id) {
   if (action === "refresh") return refresh();
@@ -543,12 +564,16 @@ async function handle(action, id) {
       () => api("admin/packages", "POST", new FormData($("#editor"))),
       "Hochladen",
     );
+  if (action.startsWith("cat-")) return catalogAction(action.slice(4), id);
   if (action.startsWith("del-")) {
     const kind = action.slice(4);
     dialog(
       kind === "agents" ? "Agent-Zugang widerrufen" : "Eintrag entfernen",
       "<p>" +
         {
+          folders: "Nur leere Ordner können entfernt werden.",
+          groups:
+            "Die Gruppe wird entfernt. Ihre Bundles und die erstellten Einzelzuweisungen bleiben erhalten.",
           agents: "Dieser Agent kann anschließend keine Bundles mehr abrufen.",
           assignments:
             "Die Regel entfällt beim nächsten Abruf. Installierte Software bleibt auf dem Ziel.",
@@ -561,14 +586,13 @@ async function handle(action, id) {
     );
   }
 }
-$("nav").onclick = (e) => {
-  const b = e.target.closest("[data-section]");
-  if (b) {
-    section = b.dataset.section;
+$("#shell").onclick = (e) => {
+  const link = e.target.closest("[data-section]");
+  if (link) {
+    section = link.dataset.section;
     render();
+    return;
   }
-};
-$("#page").onclick = (e) => {
   const b = e.target.closest("[data-do]");
   if (b)
     handle(b.dataset.do, Number(b.dataset.id)).catch((err) =>

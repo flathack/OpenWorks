@@ -91,3 +91,41 @@ class DistributionTests(unittest.TestCase):
         key = self.post("bundles", body)["id"]
         self.post("bundles", body | {"id": key, "revision": 1})
         self.assertEqual(self.admin.post("/api/admin/bundles", json=body | {"id": key, "revision": 1}).status_code, 409)
+
+    def test_legacy_bundle_sandbox_and_activation(self):
+        agent = self.agent("anna", "user")
+        key = self.post("bundles", {"name": "Editor", "actions": {"start": ["App/Live.exe"]}})["id"]
+        self.post("assignments", {"bundle": key, "phase": "start", "scope": "user", "principal": "anna", "trigger": "login"})
+        plan = lambda: agent.get("/api/agent/manifest").json["assignments"]
+        initial, = plan()
+        self.post(f"sandbox/{key}", {"action": "save", "base": 1, "actions": {"start": ["App/Next.exe"]}})
+        self.assertEqual(plan(), [initial])
+        draft, = self.admin.get("/api/admin/state").json["drafts"]
+        endpoint = f"/api/admin/sandbox/{key}"
+        self.assertEqual(self.admin.post(endpoint, json={"action":"publish","stamp":"old"}).status_code, 409)
+        self.post(f"sandbox/{key}", {"action": "publish", "stamp": draft["stamp"]})
+        published, = plan()
+        self.assertEqual(published["steps"][0]["value"], "App\\Next.exe")
+        self.assertNotEqual(initial["version"], published["version"])
+        self.post("catalog", {"ids": [key], "action":"disable"})
+        self.assertEqual(plan(), [])
+        self.post("catalog", {"ids": [key], "action":"enable"})
+        self.assertEqual(plan(), [published])
+
+    def test_folder_bulk_operations_and_group_assignment_are_atomic(self):
+        self.agent("anna", "user")
+        self.post("folders", {"name":"Apps"})
+        folder, = self.admin.get("/api/admin/state").json["folders"]
+        keys = [self.post("bundles", {"name":n, "actions":{"start":[n+".exe"]}})["id"] for n in ("One", "Two")]
+        self.post("catalog", {"action":"move", "ids":keys, "folder":folder["id"]})
+        self.assertEqual(self.admin.delete("/api/admin/folders/"+str(folder["id"])).status_code, 409)
+        group = self.post("groups", {"name":"Werkzeuge", "members":keys})["id"]
+        params = {"phase":"start","scope":"user","principal":"anna","trigger":"login"}
+        self.post("assignments", params | {"bundle":keys[1]})
+        self.assertEqual(self.admin.post("/api/admin/assignments", json=params | {"group":group}).status_code, 409)
+        rule, = self.admin.get("/api/admin/state").json["assignments"]
+        self.assertEqual(rule["bundle"], keys[1])
+        self.assertEqual(self.admin.post("/api/admin/catalog", json={"action":"delete","ids":keys}).status_code, 409)
+        self.assertEqual(len(self.admin.get("/api/admin/state").json["bundles"]), 2)
+        self.admin.delete("/api/admin/assignments/"+str(rule["id"]))
+        self.assertEqual(self.post("assignments", params | {"group":group})["created"], 2)

@@ -48,7 +48,7 @@ Die von Tailscale ausgegebene HTTPS-Adresse dient der Webkonsole und dem Agenten
 
 ## Einen Windows-Agenten einrichten
 
-1. In der Konsole **Agenten → Agent registrieren** wählen. Für ein Gerät beispielsweise Zielkennung `PC-023`, für einen Benutzer `FIRMA\anna` verwenden. Jede Installation erhält ein eigenes Token. Die Zielkennung wird administrativ beim Registrieren festgelegt. Es gibt in dieser Version keinen Verzeichnisdienstabgleich.
+1. In der Konsole **Geräte → Agent registrieren** oder **Benutzer → Agent registrieren** wählen. Für ein Gerät beispielsweise Zielkennung `PC-023`, für einen Benutzer `FIRMA\anna` verwenden. Jede Installation erhält ein eigenes Token. Die Zielkennung wird administrativ beim Registrieren festgelegt. Es gibt in dieser Version keinen Verzeichnisdienstabgleich.
 2. Das einmalig angezeigte Token bereithalten. Der Agent liegt als Rust-Quellprojekt bei. Auf einem Windows-Buildrechner mit Rust ab 1.89, C++-Build-Tools und Windows SDK für die Zielarchitektur bauen.
 
    ```powershell
@@ -73,13 +73,23 @@ Die von Tailscale ausgegebene HTTPS-Adresse dient der Webkonsole und dem Agenten
 2. Unter **Variablen** die globale Variable `PAKET` auf diesen Dateinamen setzen.
 3. **Bundles → Bundle anlegen** öffnen. In der Install-Liste eine Aktion `${PAKET}` anlegen. In der Start-Liste beispielsweise `Hersteller\Werkzeug.exe` und in der Uninstall-Liste `${PAKET}` eintragen. Die Reihenfolge lässt sich über die Pfeiltasten im Editor ändern.
 4. Unter **Zuweisungen** Bundle, Ziel, Aktionsliste und Auslöser wählen. Beispielsweise **Install → Gerät → Beim Booten** oder **Start → Benutzer → Bei Anmeldung**. Für ein benutzerspezifisches Paket den Variablenwert im Bundle überschreiben.
-5. Unter **Agenten** den letzten Abruf und unter **Ausführungen** das Ergebnis prüfen. Eine Programmstart-Rückmeldung bestätigt die erfolgreiche Prozesserstellung.
+5. Unter **Geräte** oder **Benutzer** den letzten Abruf und unter **Ausführungen** das Ergebnis prüfen. Eine Programmstart-Rückmeldung bestätigt die erfolgreiche Prozesserstellung.
 
 Zeitgesteuerte Regeln speichern einen absoluten Zeitpunkt. Offline-Geräte holen fällige Regeln beim nächsten Abruf nach. Eine Sofort- oder Zeitregel läuft einmal je Version und Agent. Eine Boot- oder Anmelderegel läuft bei jedem entsprechenden Ereignis. Gleichartige Ereignisse während einer Offlinephase werden zusammengefasst. Eine neue Bundle-Revision oder ein geänderter effektiver Aktionswert macht die Regel erneut ausführbar. Änderungen an ereignisgebundenen Regeln greifen beim passenden Ereignis.
 
 Der Agent speichert abgeschlossene Schritte lokal und versucht fehlgeschlagene Schritte beim nächsten Abruf erneut. Ein Abbruch zwischen erfolgreicher Windows-Aktion und lokalem Speichern kann zur Wiederholung dieses Schritts führen. Eine erfolgreiche MSI-Installation mit ausstehendem Neustart wird gemeldet. Der Agent startet den Rechner dafür nicht selbst neu.
 
-Zum Entfernen einer Anwendung eine Uninstall-Regel zuweisen und konkurrierende Install- oder Startregeln entfernen. Das Löschen einer Zuweisung beendet deren zukünftige Verteilung. Unter **Agenten** lässt sich ein einzelnes Token widerrufen. Windows-Aufgaben heißen `OpenWorks-Device-*` oder `OpenWorks-User-<SID>-*`; Agent, Cache und Zustand liegen unter `%ProgramFiles%\OpenWorks\DeviceAgent` beziehungsweise `%LOCALAPPDATA%\OpenWorks\UserAgent`.
+Zum Entfernen einer Anwendung eine Uninstall-Regel zuweisen und konkurrierende Install- oder Startregeln entfernen. Das Löschen einer Zuweisung beendet deren zukünftige Verteilung. Unter **Geräte** oder **Benutzer** lässt sich ein einzelnes Token widerrufen. Windows-Aufgaben heißen `OpenWorks-Device-*` oder `OpenWorks-User-<SID>-*`; Agent, Cache und Zustand liegen unter `%ProgramFiles%\OpenWorks\DeviceAgent` beziehungsweise `%LOCALAPPDATA%\OpenWorks\UserAgent`.
+
+## Bundle-Katalog
+
+Die Bundle-Ansicht bietet Ordner, Kategorien, Mehrfachauswahl und einen Suchbereich. Mit **Neu** legst du Windows-Bundles, Unterordner und Bundle-Gruppen an. Über den Ordnerpfad gelangst du zur übergeordneten Ebene. Die Option **Unterordner einbeziehen** durchsucht den gesamten gewählten Teilbaum. Favoriten gelten für den verwendeten Browser.
+
+Unter **Aktion** kannst du ausgewählte Bundles verschieben, aktivieren oder deaktivieren. Deaktivieren blendet ihre Regeln beim nächsten Abruf aus. Bereits installierte Software bleibt auf dem Gerät. Nach erneuter Aktivierung können zuvor ausgeblendete Regeln wieder ausgeführt werden.
+
+**Schnellaufgaben → Zuweisen** erstellt bei einer Gruppe Einzelzuweisungen für die zum Zeitpunkt der Bestätigung enthaltenen Bundles. Spätere Änderungen an der Gruppe wirken sich auf neue Gruppenzuweisungen aus. Fehlt die gewählte Aktionsliste oder besteht bereits eine entsprechende Zuweisung, bricht der Server den gesamten Vorgang ab.
+
+Für eine vorbereitete Änderung an einem vorhandenen Bundle wähle **Schnellaufgaben → Sandbox bearbeiten**. Der Entwurf enthält die Aktionslisten und Bundle-Variablen. Der Agent erhält weiterhin die veröffentlichte Version. **Sandbox veröffentlichen** prüft die Aktionen und erhöht die Revision. Bei einer zwischenzeitlich geänderten Ausgangsversion schützt ein Versionsabgleich die neuere Bearbeitung.
 
 ## Projekt und Prüfung
 

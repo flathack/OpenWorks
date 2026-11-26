@@ -3,9 +3,10 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="theme-color" content="#152a2a" />
+    <meta name="theme-color" content="#192951" />
     <title>OpenWorks · Verwaltung</title>
     <link rel="stylesheet" href="/static/app.css" />
+    <script src="/static/catalog.js" defer></script>
     <script src="/static/app.js" defer></script>
   </head>
   <body>
@@ -26,16 +27,33 @@
       </form>
     </section>
     <div id="shell" hidden>
-      <aside>
+      <header class="topbar">
         <div class="brand"><i aria-hidden="true"></i>OpenWorks</div>
+        <span class="product">Management Console</span>
+        <div class="session">
+          <span>Administrator</span><button id="logout">Abmelden</button>
+        </div>
+      </header>
+      <aside class="sidebar">
         <nav aria-label="Hauptnavigation"></nav>
-        <button class="logout" id="logout">Abmelden</button>
+        <details open>
+          <summary>Bundle-Aufgaben</summary>
+          <div class="side-links">
+            <button data-do="bundle">Bundle anlegen</button
+            ><button data-do="assign">Zuweisung anlegen</button>
+          </div>
+        </details>
+        <details open>
+          <summary>Favoriten</summary>
+          <div id="favorites" class="side-links"></div>
+        </details>
       </aside>
       <main>
-        <header>
-          <div class="context">OpenWorks <span>/</span> Verwaltung</div>
-          <h1 id="heading"></h1>
-        </header>
+        <div class="workspace-tabs">
+          <button data-section="dashboard">Dashboard</button
+          ><button data-section="bundles">Bundles</button>
+        </div>
+        <h1 id="heading"></h1>
         <div id="page"></div>
       </main>
     </div>
