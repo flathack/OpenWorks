@@ -2,7 +2,8 @@
 param(
     [Parameter(Mandatory)][ValidateSet('device','user')][string]$Scope,
     [Parameter(Mandatory)][uri]$Server,
-    [Parameter(Mandatory)][string]$Binary
+    [Parameter(Mandatory)][string]$Binary,
+    [SecureString]$Token
 )
 $ErrorActionPreference = 'Stop'
 if ($Server.Scheme -ne 'https' -and !($Server.Scheme -eq 'http' -and $Server.Host -in @('localhost','127.0.0.1','[::1]'))) {
@@ -33,10 +34,10 @@ if ($isDevice) {
     & icacls.exe $dest /inheritance:r /grant:r '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' | Out-Null
     if ($LASTEXITCODE) { throw 'Agent-Verzeichnis konnte nicht geschützt werden.' }
 }
-$secret = Read-Host 'Agent-Token aus der OpenWorks-Konsole' -AsSecureString
+if (!$Token) { $Token = Read-Host 'Agent-Token aus der OpenWorks-Konsole' -AsSecureString }
 $exe = Join-Path $dest 'openworks-agent.exe'
 Copy-Item -LiteralPath $source -Destination $exe -Force
-$config = @{ server=$Server.GetLeftPart([UriPartial]::Authority); scope=$Scope; token=[Net.NetworkCredential]::new('', $secret).Password }
+$config = @{ server=$Server.GetLeftPart([UriPartial]::Authority); scope=$Scope; token=[Net.NetworkCredential]::new('', $Token).Password }
 [IO.File]::WriteAllText($configPath, ($config | ConvertTo-Json), [Text.UTF8Encoding]::new($false))
 $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -MultipleInstances Queue -ExecutionTimeLimit (New-TimeSpan -Hours 4)
 function Register-SyncTask($eventName, $trigger) {

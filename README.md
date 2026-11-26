@@ -29,6 +29,23 @@ python -m venv .venv
 
 SQLite-Datenbank und Paketinhalte liegen unter `instance/`. Mit `--data PFAD` bei beiden Befehlen ein anderes Datenverzeichnis wählen. Zum Sichern den Server beenden und das komplette Verzeichnis kopieren. Für einen Passwortwechsel den Server stoppen, erneut `init` ausführen und den Server starten. Dadurch verfallen bestehende Admin-Sitzungen.
 
+## Server mit Docker Compose
+
+```sh
+docker compose up -d --build --wait
+docker compose exec server python -m server.app init --data /data
+docker compose restart server
+```
+
+Der Container speichert Datenbank und MSI-Dateien im benannten Volume `data`. Docker bindet Port 8787 an die Loopback-Adresse des Hosts. Für den Zugriff im Tailnet stellt Tailscale Serve das HTTPS-Zertifikat und den Proxy bereit. Den gewünschten HTTPS-Port vorher mit `tailscale serve status` prüfen.
+
+```sh
+tailscale serve --bg --https=8787 http://127.0.0.1:8787
+docker compose ps
+```
+
+Die von Tailscale ausgegebene HTTPS-Adresse dient der Webkonsole und dem Agenten als Serveradresse. Der Agent baut die Verbindung vom Windows-Gerät zum Server auf.
+
 ## Einen Windows-Agenten einrichten
 
 1. In der Konsole **Agenten → Agent registrieren** wählen. Für ein Gerät beispielsweise Zielkennung `PC-023`, für einen Benutzer `FIRMA\anna` verwenden. Jede Installation erhält ein eigenes Token. Die Zielkennung wird administrativ beim Registrieren festgelegt. Es gibt in dieser Version keinen Verzeichnisdienstabgleich.
