@@ -4,7 +4,7 @@ import re
 import time
 from flask import abort, g, jsonify, request
 
-from .model import compile_actions, fingerprint
+from .model import compile_actions, condition, fingerprint, resolver
 
 DEFAULT_BRANDING = {
     "title": "OpenWorks Anwendungen", "theme": "orbit", "accent": "#39AEEF",
@@ -68,19 +68,31 @@ def register_details(app, db, rows, globals_, packages, manifest):
                 info = db().execute("SELECT description,symbol FROM bundle_info WHERE bundle=?", (key,)).fetchone()
                 apps[key] = dict(bundle=key, name=rule["name"], revision=rule["revision"],
                                  **dict(info), launch=None, phases=[], icon_path=None, device=False)
+            if "requires" in rule:
+                apps[key].update(requires=rule["requires"], show_unmet=rule["show_unmet"])
             apps[key]["phases"].append(rule["phase"])
             if rule["phase"] == "start" and rule["steps"]:
-                apps[key]["icon_path"] = rule["steps"][0]["value"]
+                apps[key]["icon_path"] = next((s["value"] for s in rule["steps"] if s["kind"] == "launch"), None)
             if rule["phase"] == "start" and rule["trigger"] == "manual":
                 apps[key]["launch"] = rule["id"]
-        for row in rows("""SELECT b.id,b.name,b.revision,i.description,i.symbol,a.phase
+        for row in rows("""SELECT b.id,b.name,b.revision,b.body,i.description,i.symbol,a.phase
                            FROM user_device link JOIN agents device ON device.id=link.device_agent
                            JOIN assignments a ON a.scope='device' AND a.principal=device.principal
                            JOIN bundles b ON b.id=a.bundle JOIN bundle_info i ON i.bundle=b.id
                            LEFT JOIN bundle_catalog c ON c.bundle=b.id
                            WHERE link.user_agent=? AND COALESCE(c.enabled,1)=1""", (g.agent["id"],)):
+            recipe = json.loads(row["body"])
+            requirement = recipe.get("requires", {})
+            gated = bool(requirement.get("rules") or "kind" in requirement)
+            if gated and request.headers.get("X-OpenWorks-Protocol") != "2":
+                continue
+            if not any(isinstance(x, str) or x.get("enabled", True) for x in recipe["actions"].get(row["phase"], [])):
+                continue
             item = apps.setdefault(row["id"], dict(bundle=row["id"], name=row["name"], revision=row["revision"],
                                    description=row["description"], symbol=row["symbol"], launch=None, phases=[], icon_path=None))
+            if gated:
+                item.update(requires=condition(requirement, resolver(recipe, globals_())),
+                            show_unmet=recipe.get("show_unmet", False))
             item["device"] = True
             if row["phase"] not in item["phases"]:
                 item["phases"].append(row["phase"])
@@ -150,7 +162,7 @@ def register_details(app, db, rows, globals_, packages, manifest):
             return jsonify(ok=True)
         published = db().execute("SELECT body FROM bundles WHERE id=?", (key,)).fetchone()
         actions = compile_actions(json.loads(published[0]), globals_(), packages())
-        hashes = {step["value"] for phase in ("install","uninstall") for step in actions[phase]}
+        hashes = {step["value"] for steps in actions.values() for step in steps if step["kind"] in ("install","uninstall","cache","repair")}
         info["size"] = sum(p["size"] for p in rows("SELECT digest,size FROM packages") if p["digest"] in hashes)
         info["versions"] = rows("SELECT revision,name,recorded FROM bundle_versions WHERE bundle=? ORDER BY revision DESC", (key,))
         info["reports"] = rows("""SELECT r.* FROM reports r JOIN assignments a ON a.id=r.assignment

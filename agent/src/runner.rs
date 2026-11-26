@@ -56,20 +56,10 @@ fn package(config: &Config, dir: &Path, client: &Client, digest: &str) -> Result
     Ok(path)
 }
 
-fn start(relative: &str) -> Result<()> {
-    if relative.eq_ignore_ascii_case(r"%SystemRoot%\explorer.exe") {
-        let root = env::var_os("SystemRoot").context("SystemRoot missing")?;
-        Command::new(Path::new(&root).join("explorer.exe"))
-            .spawn()
-            .context("Windows Explorer launch failed")?;
-        return Ok(());
-    }
+fn under_program_files(relative: &str) -> Result<PathBuf> {
     let exe = Path::new(relative);
     ensure!(
-        exe.extension()
-            .is_some_and(|s| s.eq_ignore_ascii_case("exe"))
-            && !relative.contains(':')
-            && exe.components().all(|c| matches!(c, Component::Normal(_))),
+        !relative.contains(':') && exe.components().all(|c| matches!(c, Component::Normal(_))),
         "Invalid application path"
     );
     let base = fs::canonicalize(env::var_os("ProgramFiles").context("ProgramFiles missing")?)?;
@@ -79,31 +69,124 @@ fn start(relative: &str) -> Result<()> {
         target.starts_with(&base),
         "Application outside Program Files"
     );
-    Command::new(target).spawn().context("Launch failed")?;
+    Ok(target)
+}
+
+fn start(step: &Step) -> Result<()> {
+    let target = if step
+        .value
+        .eq_ignore_ascii_case(r"%SystemRoot%\explorer.exe")
+    {
+        PathBuf::from(env::var_os("SystemRoot").context("SystemRoot missing")?).join("explorer.exe")
+    } else {
+        ensure!(
+            step.value.to_ascii_lowercase().ends_with(".exe"),
+            "EXE erforderlich"
+        );
+        under_program_files(&step.value)?
+    };
+    let mut cmd = Command::new(target);
+    cmd.envs(&step.environment);
+    if let Some(cwd) = &step.cwd {
+        cmd.current_dir(under_program_files(cwd)?);
+    }
+    use std::process::Stdio;
+    let mut child = cmd
+        .args(&step.args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()?;
+    let status = match step.wait.as_deref() {
+        None | Some("none") => return Ok(()),
+        Some("exit") => child.wait()?,
+        Some("timeout") => {
+            use std::time::{Duration, Instant};
+            let deadline =
+                Instant::now() + Duration::from_secs(step.seconds.unwrap_or(60).min(86400));
+            loop {
+                if let Some(status) = child.try_wait()? {
+                    break status;
+                }
+                if Instant::now() >= deadline {
+                    if step.kill_timeout {
+                        child.kill()?;
+                        child.wait()?;
+                    }
+                    return Ok(());
+                }
+                std::thread::sleep(Duration::from_millis(100));
+            }
+        }
+        _ => bail!("Ungültige Warteoption"),
+    };
+    let code = status.code().context("Prozess ohne Rückgabecode beendet")?;
+    ensure!(
+        step.codes.as_deref().unwrap_or(&[0]).contains(&code),
+        "Rückgabecode {code}"
+    );
     Ok(())
 }
 
-pub fn execute(config: &Config, dir: &Path, client: &Client, step: &Step) -> Result<bool> {
+pub fn execute(
+    config: &Config,
+    dir: &Path,
+    client: &Client,
+    bundle: u64,
+    step: &Step,
+) -> Result<bool> {
     ensure!(cfg!(windows), "This agent executes Windows actions only");
     if step.kind == "launch" {
         ensure!(
             config.scope == "user",
             "Launch requires an interactive user"
         );
-        start(&step.value)?;
+        start(step)?;
         return Ok(false);
     }
-    let install = match step.kind.as_str() {
-        "install" => true,
-        "uninstall" => false,
+    if matches!(
+        step.kind.as_str(),
+        "mkdir" | "rmdir" | "copy_file" | "remove_file" | "write_text"
+    ) {
+        #[cfg(not(windows))]
+        bail!("Windows erforderlich: {bundle}");
+        #[cfg(windows)]
+        return crate::files::apply(dir, bundle, step).map(|_| false);
+    }
+    if step.kind == "delay" {
+        let seconds = step.value.parse::<u64>()?;
+        ensure!((1..=300).contains(&seconds), "Ungültige Verzögerung");
+        std::thread::sleep(std::time::Duration::from_secs(seconds));
+        return Ok(false);
+    }
+    if step.kind == "uncache" {
+        ensure!(
+            step.value.len() == 64 && step.value.bytes().all(|b| b.is_ascii_hexdigit()),
+            "Invalid content hash"
+        );
+        let cached = dir.join("cache").join(format!("{}.msi", step.value));
+        match fs::remove_file(cached) {
+            Ok(()) => {}
+            Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+            Err(e) => return Err(e.into()),
+        }
+        return Ok(false);
+    }
+    let switch = match step.kind.as_str() {
+        "install" => "/i",
+        "uninstall" => "/x",
+        "repair" => "/fomus",
+        "cache" => {
+            package(config, dir, client, &step.value)?;
+            return Ok(false);
+        }
         _ => bail!("Unknown action type"),
     };
+    let install = step.kind == "install";
     let file = package(config, dir, client, &step.value)?;
     let root = env::var_os("SystemRoot").context("SystemRoot missing")?;
     let mut cmd = Command::new(Path::new(&root).join("System32/msiexec.exe"));
-    cmd.arg(if install { "/i" } else { "/x" })
-        .arg(file)
-        .args(["/qn", "/norestart"]);
+    cmd.arg(switch).arg(file).args(["/qn", "/norestart"]);
     if install && config.scope == "user" {
         cmd.args(["ALLUSERS=2", "MSIINSTALLPERUSER=1"]);
     } else if install {
@@ -112,7 +195,7 @@ pub fn execute(config: &Config, dir: &Path, client: &Client, step: &Step) -> Res
     match cmd.status()?.code() {
         Some(0) => Ok(false),
         Some(3010) | Some(1641) => Ok(true),
-        Some(1605) if !install => Ok(false),
+        Some(1605) if step.kind == "uninstall" => Ok(false),
         code => bail!("Windows Installer exit code {code:?}"),
     }
 }

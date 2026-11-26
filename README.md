@@ -4,7 +4,7 @@ OpenWorks ist eine selbst gehostete Softwareverteilung für Windows. Administrat
 
 ## Funktionsumfang
 
-| Bereich | Verhalten in Version 0.1 |
+| Bereich | Verhalten in Version 0.3 |
 | --- | --- |
 | Install | Geordnete Liste von MSI-Paketen aus dem Serverkatalog. Der Agent prüft jede Datei vor der Verwendung per SHA-256. |
 | Start | Geordnete Liste installierter EXE-Dateien unter `Program Files`. Der Benutzer-Agent arbeitet bei Bedarf zuerst die Install-Liste ab und startet die Anwendungen in der interaktiven Sitzung. |
@@ -13,6 +13,18 @@ OpenWorks ist eine selbst gehostete Softwareverteilung für Windows. Administrat
 | Auslöser | Beim nächsten Abruf, zu einem einmaligen Zeitpunkt, beim Systemstart oder bei der Anmeldung. Beim Booten sind Geräteziele verfügbar. |
 | Variablen | Globale Werte und Bundle-Werte mit der Schreibweise `${NAME}`. Bundle-Werte haben Vorrang. Platzhalter sind in MSI-Namen und EXE-Pfaden verfügbar. |
 | Rückmeldung | Die Konsole zeigt den letzten Abruf sowie Erfolg, Neustartbedarf oder Fehler je Agent und Zuweisung. |
+
+## Bundles bearbeiten
+
+Unter **Bundles → Bundle anlegen** den Namen und Ordner wählen. Der Reiter **Aktionen** enthält die Listen **Verteilen, Installieren, Starten, Reparieren, Deinstallieren und Beenden**. Jede Liste lässt sich separat zuweisen. Über **Hinzufügen** einen Aktionstyp wählen, die Aktion benennen und mit **OK** in die Liste übernehmen. **Speichern** veröffentlicht die gesamte Änderung. Zum Vorbereiten einer Änderung an einer bestehenden Version **Freigeben → Sandbox bearbeiten** verwenden.
+
+- MSI-Pakete lassen sich vorab in den Cache laden, installieren, reparieren, deinstallieren und aus dem Cache entfernen.
+- Dateiaktionen arbeiten im lokalen Verzeichnis `bundles/<Bundle-ID>` der jeweiligen Agent-Registrierung. Sie erstellen Ordner, installieren UTF-8-Textdateien bis 64 KiB, kopieren oder entfernen Dateien und entfernen leere Ordner.
+- Startaktionen führen eine installierte Anwendung im Benutzerkontext aus. Parameter werden einzeln übergeben. Arbeitsverzeichnis, Prozessvariablen, Warteverhalten und erfolgreiche Rückgabecodes sind pro Aktion einstellbar. Verzögerungen zwischen Schritten können 1 bis 300 Sekunden dauern.
+- Unter **Anforderungen** lassen sich Filter mit **und** und **oder** verschachteln. Der Agent prüft sie vor der Ausführung. Für das Bundle kann eine gesperrte Kachel sichtbar bleiben. Pro Aktion lässt sich wählen, ob eine unerfüllte Bedingung zum Überspringen oder zu einem Fehler führt.
+- **Einstellungen** zeigt globale und lokale Variablen. Lokale Werte überschreiben gleichnamige globale Werte. Ein Wert kann weitere Variablen referenzieren. `${ProgramFiles}` und `${SystemRoot}` stehen als Windows-Pfadvariablen zur Verfügung.
+
+Für erweiterte Aktionslisten und Anforderungen wird Agent 0.3.0 benötigt. Ältere Agenten erhalten weiterhin kompatible Zuweisungen.
 
 ## Server unter Windows starten
 
@@ -75,7 +87,7 @@ Unter **Richtlinien → Anwendungskatalog → Einstellungen** lassen sich Fenste
 
 Ein Klick auf einen Gerätenamen öffnet Zusammenfassung, Inventar, Zuweisungen, Einstellungen und Meldungen. Der Geräte-Agent sendet etwa alle 15 Minuten Windows- und Hardwareinformationen. Organisation und Standort können Administratoren ergänzen. Unter **Einstellungen** lassen sich die auf diesem Gerät installierten Benutzer-Agenten verknüpfen. Deren Katalog zeigt auch Gerätezuweisungen an, die weiterhin im Gerätekontext ausgeführt werden.
 
-Ein Klick auf einen Bundle-Namen öffnet die Zusammenfassung. Weitere Reiter zeigen Beziehungen, Aktionslisten, Variablen, Freigabe und veröffentlichte Revisionen. Der Versionswähler schaltet zwischen Veröffentlichung und vorhandenem Sandbox-Entwurf um. Die Revisionsliste wird ab Installation dieser Version geführt. Für ältere Einträge sind historische Zeitpunkte unbekannt.
+Ein Klick auf einen Bundle-Namen öffnet die Zusammenfassung. Weitere Reiter zeigen Beziehungen, Systemanforderungen, Aktionslisten, Variablen, Freigabe und veröffentlichte Revisionen. Der Versionswähler schaltet zwischen Veröffentlichung und vorhandenem Sandbox-Entwurf um. Die Revisionsliste wird ab Installation dieser Version geführt. Für ältere Einträge sind historische Zeitpunkte unbekannt.
 
 Bestehende Installationen mit **Install-Agent.ps1 -Update -Scope user -Binary .\openworks-agent.exe** aktualisieren. Die Katalog-EXE muss neben dem Rust-Agenten liegen. Für den Geräte-Agenten **-Scope device** administrativ ausführen. Das Update übernimmt die vorhandene Registrierung und die Windows-Aufgaben.
 

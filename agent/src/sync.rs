@@ -14,6 +14,23 @@ use crate::{Config, runner};
 pub struct Step {
     pub kind: String,
     pub value: String,
+    pub requires: Option<crate::requirements::Condition>,
+    #[serde(default)]
+    pub fail_unmet: bool,
+    #[serde(default)]
+    pub continue_error: bool,
+    #[serde(default)]
+    pub args: Vec<String>,
+    pub cwd: Option<String>,
+    pub text: Option<String>,
+    pub source: Option<String>,
+    #[serde(default)]
+    pub environment: BTreeMap<String, String>,
+    pub wait: Option<String>,
+    pub seconds: Option<u64>,
+    #[serde(default)]
+    pub kill_timeout: bool,
+    pub codes: Option<Vec<i32>>,
 }
 
 #[derive(Deserialize)]
@@ -25,6 +42,7 @@ struct Rule {
     phase: String,
     trigger: String,
     due: Option<u64>,
+    requires: Option<crate::requirements::Condition>,
     steps: Vec<Step>,
     install: Vec<Step>,
 }
@@ -52,6 +70,8 @@ struct Job {
     prepared: bool,
     completed: bool,
     reboot: bool,
+    #[serde(default)]
+    warnings: usize,
     report: Option<(String, String)>,
 }
 
@@ -159,6 +179,20 @@ pub fn sync(
             continue;
         };
         if !job.completed && (rule.trigger != "manual" || manual.is_some()) {
+            if let Some(condition) = &rule.requires {
+                match condition.matches() {
+                    Ok(true) => {}
+                    Ok(false) if manual.is_none() => continue,
+                    Ok(false) => anyhow::bail!(
+                        "Die Systemanforderungen für diese Anwendung sind nicht erfüllt."
+                    ),
+                    Err(e) => {
+                        eprintln!("Bundle {}: {e}", rule.bundle);
+                        failed = true;
+                        continue;
+                    }
+                }
+            }
             let result = run_steps(config, dir, client, &mut state, rule);
             let job = state.jobs.get_mut(&rule.id).unwrap();
             match result {
@@ -169,7 +203,14 @@ pub fn sync(
                     } else {
                         "Erfolgreich"
                     };
-                    job.report = Some(("ok".into(), msg.into()));
+                    job.report = Some((
+                        "ok".into(),
+                        if job.warnings > 0 {
+                            format!("{msg}. {} Aktionsfehler übersprungen.", job.warnings)
+                        } else {
+                            msg.into()
+                        },
+                    ));
                 }
                 Err(error) => {
                     failed = true;
@@ -219,7 +260,7 @@ fn run_steps(
     if !state.jobs[&rule.id].prepared {
         if rule.phase == "start" && state.installed.get(&rule.bundle) != Some(&rule.install_version)
         {
-            run_list(config, dir, client, state, rule.id, &rule.install)?;
+            run_list(config, dir, client, state, rule, &rule.install)?;
             state
                 .installed
                 .insert(rule.bundle, rule.install_version.clone());
@@ -229,7 +270,7 @@ fn run_steps(
         job.cursor = 0;
         state.save(dir)?;
     }
-    run_list(config, dir, client, state, rule.id, &rule.steps)?;
+    run_list(config, dir, client, state, rule, &rule.steps)?;
     match rule.phase.as_str() {
         "install" => {
             state
@@ -249,11 +290,28 @@ fn run_list(
     dir: &Path,
     client: &Client,
     state: &mut State,
-    id: u64,
+    rule: &Rule,
     steps: &[Step],
 ) -> Result<()> {
+    let id = rule.id;
     for step in steps.iter().skip(state.jobs[&id].cursor) {
-        let reboot = runner::execute(config, dir, client, step)?;
+        let result = (|| -> Result<bool> {
+            if let Some(condition) = &step.requires {
+                if !condition.matches()? {
+                    ensure!(!step.fail_unmet, "Aktionsanforderungen nicht erfüllt");
+                    return Ok(false);
+                }
+            }
+            runner::execute(config, dir, client, rule.bundle, step)
+        })();
+        let reboot = match result {
+            Err(e) if step.continue_error => {
+                state.jobs.get_mut(&id).unwrap().warnings += 1;
+                eprintln!("Zuweisung {id}: {e:#}");
+                false
+            }
+            other => other?,
+        };
         let job = state.jobs.get_mut(&id).unwrap();
         job.cursor += 1;
         job.reboot |= reboot;
@@ -275,6 +333,7 @@ mod tests {
             phase: "install".into(),
             trigger: trigger.into(),
             due: Some(100),
+            requires: None,
             steps: vec![],
             install: vec![],
         }

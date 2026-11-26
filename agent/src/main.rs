@@ -1,6 +1,11 @@
+#[cfg(windows)]
+mod files;
 mod inventory;
+mod requirements;
 mod runner;
 mod sync;
+#[cfg(windows)]
+mod windows_filters;
 
 use anyhow::{Context, Result, ensure};
 use reqwest::{Url, blocking::Client, redirect::Policy};
@@ -61,19 +66,26 @@ fn main() -> Result<()> {
     let text = fs::read_to_string(&path)?;
     let config: Config = serde_json::from_str(text.trim_start_matches('\u{feff}'))?;
     config.validate()?;
+    let mut headers = reqwest::header::HeaderMap::new();
+    headers.insert(
+        "x-openworks-protocol",
+        reqwest::header::HeaderValue::from_static("2"),
+    );
     let client = Client::builder()
+        .default_headers(headers)
         .redirect(Policy::none())
         .connect_timeout(Duration::from_secs(15))
         .timeout(Duration::from_secs(600))
         .build()?;
     if event == "catalog" {
         ensure!(config.scope == "user", "Catalog requires user enrollment");
-        let result: serde_json::Value = client
+        let mut result: serde_json::Value = client
             .get(config.url("catalog"))
             .bearer_auth(&config.token)
             .send()?
             .error_for_status()?
             .json()?;
+        requirements::filter_catalog(&mut result)?;
         println!("{}", serde_json::to_string(&result)?);
         return Ok(());
     }

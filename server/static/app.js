@@ -18,7 +18,14 @@ const sections = {
   variables: ["Variablen", "M8 4H6v6l-2 2 2 2v6h2m8-16h2v6l2 2-2 2v6h-2"],
   reports: ["Ausführungen", "M4 3h16v18H4zm3 11 3 3 6-7"],
 };
-const phases = { install: "Install", start: "Start", uninstall: "Uninstall" };
+const phases = {
+  distribute: "Verteilen",
+  install: "Installieren",
+  start: "Starten",
+  repair: "Reparieren",
+  uninstall: "Deinstallieren",
+  terminate: "Beenden",
+};
 const triggers = {
   manual: "Im Anwendungskatalog",
   now: "Beim nächsten Abruf",
@@ -322,119 +329,10 @@ function variableEditor(values) {
     },
   };
 }
-function bundleEditor(id, sandbox = false) {
-  const b = state.bundles.find((b) => b.id === id) ?? {
-    name: "",
-    actions: { install: [], start: [], uninstall: [] },
-    variables: {},
-  };
-  const draft = sandbox && state.drafts.find((d) => d.bundle === id);
-  const actions = structuredClone((draft || b).actions);
-  const vars = variableEditor((draft || b).variables);
-  let phase = "install";
-  dialog(
-    sandbox
-      ? "Sandbox bearbeiten"
-      : id
-        ? "Bundle bearbeiten"
-        : "Bundle anlegen",
-    '<label>Bundle-Name<input id="bname" maxlength="180" required></label>' +
-      (sandbox
-        ? '<p class="sub">Dieser Entwurf wird erst nach der Veröffentlichung verteilt.</p>'
-        : '<div class="pair"><label>Ordner<select id="bundle-folder">' +
-          folderOptions(b.id ? b.folder : catalog.folder) +
-          '</select></label><label>Kategorie<input id="category" maxlength="100"></label></div>') +
-      '<h3>Aktionslisten</h3><div class="tabs" id="phases"></div><p id="help" class="sub"></p><div id="steps"></div><datalist id="pkgs">' +
-      state.packages
-        .map((p) => '<option value="' + esc(p.name) + '">')
-        .join("") +
-      '</datalist><button type="button" class="secondary" id="add-step">Aktion hinzufügen</button><h3>Bundle-Variablen</h3><div id="bundle-vars"></div>',
-    async () => {
-      if (sandbox)
-        return api("admin/sandbox/" + id, "POST", {
-          action: "save",
-          stamp: draft?.stamp,
-          base: draft?.base ?? b.revision,
-          variables: vars.read(),
-          actions,
-        });
-      await api("admin/bundles", "POST", {
-        folder: Number($("#bundle-folder").value) || null,
-        category: $("#category").value,
-        id: b.id,
-        revision: b.revision,
-        name: $("#bname").value,
-        variables: vars.read(),
-        actions,
-      });
-    },
-  );
-  $("#bname").value = b.name;
-  $("#bname").readOnly = sandbox;
-  if (!sandbox) $("#category").value = b.category || "";
-  $("#bundle-vars").append(vars.box);
-  function draw() {
-    $("#phases").replaceChildren();
-    $("#steps").replaceChildren();
-    for (const [k, label] of Object.entries(phases)) {
-      const tab = document.createElement("button");
-      tab.type = "button";
-      tab.textContent = label + " (" + actions[k].length + ")";
-      tab.setAttribute("aria-pressed", String(k === phase));
-      tab.onclick = () => {
-        phase = k;
-        draw();
-      };
-      $("#phases").append(tab);
-    }
-    $("#help").textContent =
-      phase === "start"
-        ? "EXE-Pfad relativ zu Program Files. Start erfolgt in der Benutzersitzung."
-        : "MSI-Paketname aus dem Katalog oder ein Platzhalter wie " +
-          String.fromCharCode(36) +
-          "{PAKET}.";
-    actions[phase].forEach((value, i) => {
-      const row = document.createElement("div");
-      row.className = "step";
-      row.innerHTML =
-        "<span>" +
-        String(i + 1).padStart(2, "0") +
-        '</span><input required aria-label="Aktion ' +
-        (i + 1) +
-        '" ' +
-        (phase === "start"
-          ? 'placeholder="Hersteller\\App.exe"'
-          : 'list="pkgs" placeholder="Paket.msi"') +
-        '><button type="button" class="quiet" aria-label="Nach oben">↑</button><button type="button" class="quiet" aria-label="Nach unten">↓</button><button type="button" class="quiet" aria-label="Aktion entfernen">×</button>';
-      const [, field, up, down, remove] = row.children;
-      field.value = value;
-      field.oninput = () => (actions[phase][i] = field.value);
-      const move = (delta) => {
-        const list = actions[phase];
-        [list[i], list[i + delta]] = [list[i + delta], list[i]];
-        draw();
-      };
-      up.disabled = i === 0;
-      up.onclick = () => move(-1);
-      down.disabled = i === actions[phase].length - 1;
-      down.onclick = () => move(1);
-      remove.onclick = () => {
-        actions[phase].splice(i, 1);
-        draw();
-      };
-      $("#steps").append(row);
-    });
-  }
-  $("#add-step").onclick = () => {
-    actions[phase].push("");
-    draw();
-    $("#steps").lastChild.querySelector("input").focus();
-  };
-  draw();
-}
-function assignmentEditor(id, initialBundle, group) {
+function assignmentEditor(id, initialBundle, group, scope) {
   const current = state.assignments.find((a) => a.id === id);
-  if (!state.agents.length || !state.bundles.length)
+  const available = state.agents.filter((a) => !scope || a.scope === scope);
+  if (!available.length || !state.bundles.length)
     return notice("Zuerst ein Bundle und einen Agenten anlegen.");
   dialog(
     current ? "Zuweisung bearbeiten" : "Zuweisung anlegen",
@@ -471,7 +369,7 @@ function assignmentEditor(id, initialBundle, group) {
     );
   } else if (initialBundle) $("#bundle").value = initialBundle;
   const targets = new Map(
-    state.agents.map((a) => [a.scope + ":" + a.principal.toLowerCase(), a]),
+    available.map((a) => [a.scope + ":" + a.principal.toLowerCase(), a]),
   );
   $("#target").innerHTML = options(
     Object.fromEntries(
@@ -493,7 +391,9 @@ function assignmentEditor(id, initialBundle, group) {
         Object.entries(phases).filter(
           ([p]) =>
             members.length &&
-            members.every((b) => b.actions[p].length) &&
+            members.every((b) =>
+              b.actions[p]?.some((x) => x.enabled !== false),
+            ) &&
             (user || p !== "start"),
         ),
       ),

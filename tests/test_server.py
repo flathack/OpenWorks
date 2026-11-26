@@ -158,3 +158,28 @@ class DistributionTests(unittest.TestCase):
         self.assertEqual(len(self.admin.get("/api/admin/state").json["bundles"]), 2)
         self.admin.delete("/api/admin/assignments/"+str(rule["id"]))
         self.assertEqual(self.post("assignments", params | {"group":group})["created"], 2)
+
+    def test_structured_actions_require_capable_agent_and_resolve_nested_variables(self):
+        agent = self.agent("workstation", "user")
+        self.post("variables", {"variables": {"ROOT": "%ProgramFiles%", "APP": "global"}})
+        key = self.post("bundles", {"name": "Structured", "variables": {"APP": "${ROOT}\\Tools"},
+            "requires": {"mode": "any", "rules": [{"kind":"windows","value":"Windows"}]},
+            "actions": {"start": [
+                {"name":"Launcher","kind":"launch","value":"${APP}\\Tool.exe","wait":"timeout","seconds":10},
+                {"name":"Disabled","kind":"delay","value":"2","enabled":False}]}})["id"]
+        self.post("assignments", {"phase":"start","trigger":"manual","scope":"user","principal":"workstation","bundle":key})
+        self.assertFalse(agent.get("/api/agent/manifest").json["assignments"])
+        agent.environ_base["HTTP_X_OPENWORKS_PROTOCOL"] = "2"
+        rule, = agent.get("/api/agent/manifest").json["assignments"]
+        step, = rule["steps"]
+        self.assertEqual((step["value"],step["seconds"]), ("Tools\\Tool.exe",10))
+        self.assertEqual(rule["requires"]["rules"][0]["kind"],"windows")
+        self.assertIn("requires", agent.get("/api/agent/catalog").json["apps"][0])
+        self.assertEqual(self.admin.post("/api/admin/variables", json={"variables":{"ROOT":"${APP}","APP":"${ROOT}"}}).status_code,400)
+        self.assertEqual(self.admin.post("/api/admin/bundles",json={"name":"Bad","actions":{"install":[
+            {"name":"Escape","kind":"remove_file","value":"..\\outside"}]}}).status_code,400)
+        group = self.post("groups", {"name":"Group","members":[]})["id"]
+        membership = f"bundle/{key}/groups"
+        self.post(membership, {"before":[], "groups":[group]})
+        self.assertEqual(self.admin.post("/api/admin/"+membership,json={"before":[],"groups":[]}).status_code,409)
+        self.post(membership, {"before":[group],"groups":[]})

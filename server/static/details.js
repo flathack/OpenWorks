@@ -85,6 +85,7 @@ async function renderObject() {
         ? [
             "Zusammenfassung",
             "Beziehungen",
+            "Anforderungen",
             "Aktionen",
             "Einstellungen",
             "Freigeben",
@@ -129,6 +130,22 @@ async function renderObject() {
           renderObject();
         }),
     );
+    if (bundle && view.tab === "Aktionen") {
+      for (const tab of document.querySelectorAll("[data-list]"))
+        tab.onclick = () => {
+          view.phase = tab.dataset.list;
+          renderObject();
+        };
+      for (const link of document.querySelectorAll("[data-open-step]"))
+        link.onclick = () =>
+          bundleEditor(
+            bundle.id,
+            view.draft,
+            "Aktionen",
+            view.phase || "install",
+            Number(link.dataset.openStep),
+          );
+    }
     if ($("#shown-version"))
       $("#shown-version").onchange = (e) => {
         view.draft = e.target.value === "draft";
@@ -146,49 +163,96 @@ function bundleContent(v, b, shown) {
   switch (v.tab) {
     case "Beziehungen":
       return (
-        panel(
-          "Zuweisungen",
-          editAction("assign", "Zuweisen") + relations(rules),
-        ) +
-        panel(
-          "Bundle-Gruppen",
-          facts([
-            [
-              "Mitglied in",
-              state.groups
-                .filter((g) => g.members.includes(b.id))
-                .map((g) => g.name)
-                .join(", "),
-            ],
-          ]),
-        )
-      );
-    case "Aktionen":
-      return (
-        editAction("actions", "Aktionslisten bearbeiten") +
-        Object.entries(phases)
-          .map(([phase, name]) =>
+        ["device", "user"]
+          .map((scope) =>
             panel(
-              name,
-              table(
-                ["Reihenfolge", "Aktion"],
-                shown.actions[phase].map((item, i) => [i + 1, esc(item)]),
-                "Keine Aktionen",
-              ),
+              scope === "device" ? "Gerätezuweisungen" : "Benutzerzuweisungen",
+              editAction("assign-" + scope, "Hinzufügen") +
+                table(
+                  ["Name", "Aktionsliste", "Auslöser", "Details"],
+                  rules
+                    .filter((a) => a.scope === scope)
+                    .map((a) => [
+                      esc(a.principal),
+                      esc(phases[a.phase]),
+                      esc(
+                        a.trigger === "at" ? time(a.due) : triggers[a.trigger],
+                      ),
+                      btn("assign", "Zuweisungsdetails", a.id) +
+                        btn("del-assignments", "Entfernen", a.id),
+                    ]),
+                  "Keine Zuweisungen",
+                ),
             ),
           )
-          .join("")
+          .join("") +
+        panel(
+          "Bundle-Gruppen",
+          editAction("members", "Mitgliedschaften bearbeiten") +
+            table(
+              ["Name", "Ordner"],
+              state.groups
+                .filter((g) => g.members.includes(b.id))
+                .map((g) => [
+                  esc(g.name),
+                  esc(
+                    folderTrail(g.folder)
+                      .map((f) => f.name)
+                      .join("/") || "/",
+                  ),
+                ]),
+              "Keine Gruppenmitgliedschaften",
+            ),
+        )
       );
+    case "Anforderungen":
+      return panel(
+        "Systemanforderungen",
+        facts([
+          ["Filter", conditionText(shown.requires)],
+          [
+            "Symbol bei unerfüllten Anforderungen anzeigen",
+            yes(shown.show_unmet),
+          ],
+        ]) + editAction("requirements", "Anforderungen bearbeiten"),
+      );
+    case "Aktionen": {
+      const phase = v.phase || "install",
+        list = shown.actions[phase] || [];
+      return panel(
+        "Aktionslisten",
+        '<div class="tabs sub-tabs">' +
+          Object.entries(phases)
+            .map(
+              ([k, n]) =>
+                `<button data-list="${k}" aria-pressed="${k === phase}">${n}</button>`,
+            )
+            .join("") +
+          "</div>" +
+          editAction("actions", "Aktionsliste bearbeiten") +
+          table(
+            ["Name", "Typ", "Status", "Anforderungen", "Bei Fehler fortfahren"],
+            list.map((raw, i) => {
+              const a = stepSpec(raw, phase);
+              return [
+                `<button class="quiet action-name" data-open-step="${i}">${esc(a.name)}</button>`,
+                esc(actionNames[a.kind]),
+                a.enabled === false ? "Deaktiviert" : "Aktiviert",
+                esc(conditionText(a.requires)),
+                yes(a.continue_error),
+              ];
+            }),
+            "Keine Aktionen",
+          ),
+      );
+    }
     case "Einstellungen":
       return (
+        panel("Vererbte Variablen", variableTable(state.variables)) +
         panel(
-          "Bundle-Variablen",
-          editAction("actions", "Variablen bearbeiten") +
-            table(
-              ["Name", "Wert"],
-              Object.entries(shown.variables).map(([k, x]) => [esc(k), esc(x)]),
-              "Keine Bundle-Variablen",
-            ),
+          "Systemvariablen",
+          editAction("variables", "Bundle-Variablen bearbeiten") +
+            variableTable(shown.variables),
         ) +
         panel(
           "Katalogeintrag",
@@ -401,9 +465,44 @@ function policyContent(v) {
 function detailAction(action) {
   const v = objectView,
     d = v.data;
-  if (action === "assign") return assignmentEditor(null, v.id);
-  if (action === "draft" || action === "actions")
-    return bundleEditor(v.id, action === "draft" || v.draft);
+  if (action.startsWith("assign-"))
+    return assignmentEditor(null, v.id, null, action.slice(7));
+  if (action === "members")
+    return dialog(
+      "Bundle-Gruppen",
+      state.groups
+        .map(
+          (g) =>
+            `<label class="check"><input type="checkbox" name="membership" value="${g.id}" ${g.members.includes(v.id) ? "checked" : ""}>${esc(g.name)}</label>`,
+        )
+        .join("") || "<p>Keine Bundle-Gruppen vorhanden.</p>",
+      () =>
+        api("admin/bundle/" + v.id + "/groups", "POST", {
+          before: state.groups
+            .filter((g) => g.members.includes(v.id))
+            .map((g) => g.id),
+          groups: [
+            ...document.querySelectorAll("[name=membership]:checked"),
+          ].map((el) => Number(el.value)),
+        }),
+    );
+  if (
+    action === "draft" ||
+    action === "actions" ||
+    action === "requirements" ||
+    action === "variables"
+  )
+    return bundleEditor(
+      v.id,
+      action === "draft" || v.draft,
+      {
+        actions: "Aktionen",
+        requirements: "Anforderungen",
+        variables: "Systemvariablen",
+        draft: "Allgemein",
+      }[action],
+      v.phase || "install",
+    );
   if (action === "publish" || action === "discard") {
     const draft = state.drafts.find((x) => x.bundle === v.id);
     return dialog(

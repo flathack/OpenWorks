@@ -15,7 +15,7 @@ from werkzeug.exceptions import HTTPException
 from werkzeug.security import check_password_hash, generate_password_hash
 
 from .details import register_details
-from .model import PHASES, bundle_body, compile_actions, fingerprint, string, variables
+from .model import PHASES, condition, resolver, bundle_body, compile_actions, fingerprint, string, variables
 
 ROOT = Path(__file__).resolve().parent
 
@@ -357,7 +357,7 @@ def create_app(directory, secure=False):
             keys = [data.get("bundle")]
         for key in keys:
             bundle = db().execute("SELECT name,body FROM bundles WHERE id=?", (key,)).fetchone()
-            if not bundle or not json.loads(bundle["body"])["actions"][phase]:
+            if not bundle or not json.loads(bundle["body"])["actions"].get(phase):
                 abort(400, "Die gewählte Aktionsliste muss in jedem Bundle befüllt sein.")
         if data.get("group") is not None:
             db().executemany("INSERT INTO assignments(bundle,scope,principal,phase,trigger,due) VALUES (?,?,?,?,?,?)",
@@ -391,6 +391,20 @@ def create_app(directory, secure=False):
         db().commit()
         return jsonify(ok=True)
 
+    @app.post("/api/admin/bundle/<int:key>/groups")
+    def bundle_memberships(key):
+        data = payload()
+        before, desired = set(ids(data.get("before"))), set(ids(data.get("groups")))
+        if not db().execute("SELECT 1 FROM bundles WHERE id=?", (key,)).fetchone():
+            abort(404)
+        existing = {x["group_id"] for x in rows("SELECT group_id FROM group_members WHERE bundle=?", (key,))}
+        if existing != before:
+            abort(409, "Gruppenmitgliedschaften wurden inzwischen geändert.")
+        db().executemany("DELETE FROM group_members WHERE bundle=? AND group_id=?", [(key,g) for g in existing-desired])
+        db().executemany("INSERT INTO group_members(group_id,bundle) VALUES (?,?)", [(g,key) for g in desired-existing])
+        db().commit()
+        return jsonify(ok=True)
+
     def manifest():
         items = rows("""SELECT a.id,a.bundle,a.phase,a.trigger,a.due,a.generation,b.name,b.revision,b.body
                         FROM assignments a JOIN bundles b ON b.id=a.bundle
@@ -398,13 +412,29 @@ def create_app(directory, secure=False):
                         WHERE COALESCE(c.enabled,1)=1 AND a.scope=? AND a.principal=? ORDER BY a.id""",
                      (g.agent["scope"], g.agent["principal"]))
         catalog, values = packages(), globals_()
+        result = []
         for item in items:
-            actions = compile_actions(json.loads(item.pop("body")), values, catalog)
+            body = json.loads(item.pop("body"))
+            actions = compile_actions(body, values, catalog)
             item["steps"] = actions[item["phase"]]
             item["install"] = actions["install"] if item["phase"] == "start" else []
+            requirement = body.get("requires")
+            if requirement and (requirement.get("rules") or "kind" in requirement):
+                item["requires"] = condition(requirement, resolver(body, values))
+                item["show_unmet"] = body.get("show_unmet", False)
+            extended = "requires" in item or any(
+                len(step) > 2 or step["kind"] not in ("install","uninstall","launch")
+                for step in item["steps"] + item["install"])
+            if extended and request.headers.get("X-OpenWorks-Protocol") != "2":
+                continue
+            if not item["steps"]:
+                continue
             item["install_version"] = fingerprint(actions["install"])
             item["version"] = fingerprint([item["generation"], item["revision"], item["steps"], item["install"]])
-        return items
+            if "requires" in item:
+                item["version"] = fingerprint([item["version"], item["requires"]])
+            result.append(item)
+        return result
 
     @app.get("/api/agent/manifest")
     def pull():
@@ -416,7 +446,7 @@ def create_app(directory, secure=False):
 
     @app.get("/api/agent/packages/<digest>")
     def download(digest):
-        allowed = any(step["value"] == digest and step["kind"] in ("install", "uninstall")
+        allowed = any(step["value"] == digest and step["kind"] in ("install", "uninstall", "cache", "repair")
                       for rule in manifest() for step in rule["steps"] + rule["install"])
         if not allowed:
             abort(404)

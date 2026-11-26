@@ -18,6 +18,7 @@ namespace OpenWorks {
     public class Entry {
         public int bundle;
         public long? launch;
+        public bool unavailable;
         public string name, description, symbol, icon_path;
         public string[] phases;
     }
@@ -135,6 +136,7 @@ namespace OpenWorks {
 
         async Task Launch(Entry app) {
             if (busy) return;
+            if (app.unavailable) { status.Text = "Systemanforderungen nicht erfüllt."; return; }
             if (!app.launch.HasValue) {
                 status.Text = "Die Ausführung dieser Anwendung wird durch ihre Zuweisung gesteuert."; return;
             }
@@ -193,7 +195,7 @@ namespace OpenWorks {
                     BackColor = canvas.Theme == "light" ? Color.FromArgb(227,239,246) : Color.FromArgb(30,49,72) };
                 button.FlatAppearance.BorderColor = accent;
                 button.Disposed += (s,e) => { if (button.Image != null) button.Image.Dispose(); };
-                tips.SetToolTip(button, app.description + (app.launch.HasValue ? "  ·  Starten" : "  ·  Regelgesteuert"));
+                tips.SetToolTip(button, app.description + (app.unavailable ? "  ·  Systemanforderungen nicht erfüllt" : app.launch.HasValue ? "  ·  Starten" : "  ·  Regelgesteuert"));
                 button.Click += async (s,e) => await Launch(app);
                 tile.Controls.Add(button);
                 if (catalog.policy.favorites) {

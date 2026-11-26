@@ -816,3 +816,107 @@ legend {
     padding: 6px;
   }
 }
+
+#modal:has(.bundle-workbench) {
+  width: min(980px, 96vw);
+}
+.action-dialog {
+  width: min(695px, 96vw);
+}
+.action-fields {
+  padding: 18px 20px;
+}
+.action-fields section {
+  min-height: 230px;
+}
+.action-fields label,
+.bundle-workbench label {
+  margin-bottom: 9px;
+}
+.action-fields textarea {
+  display: block;
+  width: 100%;
+  font: inherit;
+}
+.action-fields > label {
+  max-width: 420px;
+}
+.action-dialog footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+.action-dialog .error {
+  margin-inline: 20px;
+}
+.bundle-workbench .tabs,
+.sub-tabs {
+  flex-wrap: wrap;
+}
+.edit-tabs,
+.action-fields .tabs {
+  margin-bottom: 15px;
+}
+.sub-tabs button[aria-pressed="true"] {
+  border-bottom: 3px solid #d37820;
+}
+.action-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  padding: 7px;
+  background: var(--pale);
+}
+.action-bar button,
+.action-bar select,
+.conditions button {
+  font-size: 12px;
+  padding: 4px 7px;
+}
+.action-name {
+  padding: 0;
+  color: var(--blue);
+  text-decoration: underline;
+}
+.conditions {
+  margin: 12px 0;
+}
+.conditions fieldset {
+  min-width: 0;
+  border: 1px solid var(--edge);
+  padding: 10px;
+}
+.conditions fieldset > label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.conditions button {
+  margin: 2px;
+}
+.condition-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin: 5px 0;
+}
+.condition-row > input,
+.condition-row > fieldset {
+  flex: 1;
+  min-width: 110px;
+}
+.bundle-workbench section {
+  min-height: 210px;
+}
+.bundle-workbench #steps {
+  overflow-x: auto;
+}
+
+.action-bar select, .condition-row > select, .conditions fieldset > label > select {
+  width: auto;
+  max-width: 100%;
+}
+.action-bar select:first-child { max-width: 220px; }
+.action-name { border: 0; background: transparent; }

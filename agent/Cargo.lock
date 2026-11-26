@@ -581,7 +581,7 @@ dependencies = [
 
 [[package]]
 name = "openworks-agent"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "hex",
@@ -590,6 +590,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "tempfile",
+ "windows-sys",
 ]
 
 [[package]]
