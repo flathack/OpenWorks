@@ -57,6 +57,13 @@ fn package(config: &Config, dir: &Path, client: &Client, digest: &str) -> Result
 }
 
 fn start(relative: &str) -> Result<()> {
+    if relative.eq_ignore_ascii_case(r"%SystemRoot%\explorer.exe") {
+        let root = env::var_os("SystemRoot").context("SystemRoot missing")?;
+        Command::new(Path::new(&root).join("explorer.exe"))
+            .spawn()
+            .context("Windows Explorer launch failed")?;
+        return Ok(());
+    }
     let exe = Path::new(relative);
     ensure!(
         exe.extension()

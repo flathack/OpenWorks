@@ -81,6 +81,8 @@ Bestehende Installationen mit **Install-Agent.ps1 -Update -Scope user -Binary .\
 
 ## Erstes Bundle verteilen
 
+Für den Windows-Explorer unterstützt der Benutzer-Agent ab 0.2.1 den festen Startpfad `%SystemRoot%\explorer.exe`. Install- und Uninstall-Liste bleiben leer. Die Startliste mit Auslöser **Im Anwendungskatalog** einem Benutzer zuweisen.
+
 1. Unter **MSI-Pakete** ein Paket hochladen, etwa `Werkzeug-1.0.msi`.
 2. Unter **Variablen** die globale Variable `PAKET` auf diesen Dateinamen setzen.
 3. **Bundles → Bundle anlegen** öffnen. In der Install-Liste eine Aktion `${PAKET}` anlegen. In der Start-Liste beispielsweise `Hersteller\Werkzeug.exe` und in der Uninstall-Liste `${PAKET}` eintragen. Die Reihenfolge lässt sich über die Pfeiltasten im Editor ändern.
