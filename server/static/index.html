@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="de">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#152a2a" />
+    <title>OpenWorks · Verwaltung</title>
+    <link rel="stylesheet" href="/static/app.css" />
+    <script src="/static/app.js" defer></script>
+  </head>
+  <body>
+    <section id="login" class="welcome" hidden>
+      <form id="login-form" class="login-card">
+        <div class="brand"><i aria-hidden="true"></i>OpenWorks</div>
+        <h1>Verwaltung öffnen</h1>
+        <label
+          >Admin-Passwort<input
+            name="password"
+            type="password"
+            autocomplete="current-password"
+            required
+            autofocus
+        /></label>
+        <p class="error" role="alert"></p>
+        <button>Anmelden</button>
+      </form>
+    </section>
+    <div id="shell" hidden>
+      <aside>
+        <div class="brand"><i aria-hidden="true"></i>OpenWorks</div>
+        <nav aria-label="Hauptnavigation"></nav>
+        <button class="logout" id="logout">Abmelden</button>
+      </aside>
+      <main>
+        <header>
+          <div class="context">OpenWorks <span>/</span> Verwaltung</div>
+          <h1 id="heading"></h1>
+        </header>
+        <div id="page"></div>
+      </main>
+    </div>
+    <dialog id="modal">
+      <div class="modal-head">
+        <h2 id="modal-title"></h2>
+        <button type="button" class="quiet" id="close" aria-label="Schließen">
+          ×
+        </button>
+      </div>
+      <form id="editor">
+        <div id="fields"></div>
+        <p class="error" role="alert"></p>
+        <footer>
+          <button type="button" class="secondary" id="cancel">Abbrechen</button
+          ><button id="save">Speichern</button>
+        </footer>
+      </form>
+    </dialog>
+    <p id="notice" role="status" hidden></p>
+  </body>
+</html>
